@@ -17,12 +17,15 @@ AC_SUBST([ODS_COMMIT_ID],["$COMMIT_ID"])
 
 dnl Checks for programs
 AC_PROG_CC
+AC_PROG_CXX
+AX_CXX_COMPILE_STDCXX([11], noext,mandatory)
 
 dnl this will add document options. Please see m4/options.m4.
 OPTION_DOC
 
 OPTION_DEFAULT_DISABLE([debug], [ENABLE_DEBUG])
 OPTION_DEFAULT_ENABLE([python], [ENABLE_PYTHON])
+OPTION_DEFAULT_ENABLE([dsos], [ENABLE_DSOS])
 
 if test -z "$ENABLE_PYTHON_TRUE"
 then
@@ -45,6 +48,20 @@ AC_CHECK_LIB(tcmalloc,
 		[AC_MSG_WARN(You may wish to install libtcmalloc for better performance)])
 AC_SUBST([LIB_TCMALLOC])
 CFLAGS=$OCFLAGS
+
+dnl Check for zap unless DSOS is disabled.
+dnl Force the user to specify --with-zap=/path/to/it so we don't get
+dnl into situations where the wrong zap install is being picked up.
+if test -z "$ENABLE_DSOS_TRUE"; then
+AC_ARG_WITH([zap],
+	AC_HELP_STRING([--with-zap], [Specify zap location (DSOS only)]),
+	[AS_IF([test -d "$withval/lib"],
+		[LIB_ZAP="$withval"],
+		AC_MSG_ERROR([zap required by DSOS but not found at $withval]))],
+	AC_MSG_ERROR([must specify --with-zap when DSOS is enabled]))
+AC_SUBST([LIBZAP_INCDIR], [${LIB_ZAP}/include/zap])
+AC_SUBST([LIBZAP_LIBDIR], [${LIB_ZAP}/lib])
+fi
 
 distdir=${PACKAGE_NAME}-${PACKAGE_VERSION}
 AC_SUBST(ac_configure_args)
@@ -89,6 +106,13 @@ AC_CONFIG_FILES([
 		sos/include/Makefile
 		sos/src/Makefile
 		sos/python/Makefile
+		dsos/Makefile
+		dsos/include/Makefile
+		dsos/client/Makefile
+		dsos/server/Makefile
+		util/Makefile
+		util/json/Makefile
+		util/mmalloc/Makefile
 		rpm/sosdb.spec
 ])
 

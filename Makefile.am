@@ -1,6 +1,9 @@
 ACLOCAL_AMFLAGS = -I m4
-SUBDIRS = ods sos
+SUBDIRS = ods sos util
 
+if ENABLE_DSOS
+SUBDIRS += dsos
+endif
 if ENABLE_DOC
 SUBDIRS += doc
 endif

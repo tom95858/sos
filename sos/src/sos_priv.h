@@ -61,6 +61,7 @@
 #include <sys/queue.h>
 #include <endian.h>
 #include <stdarg.h>
+#include <sys/syscall.h>
 
 #include <sos/sos.h>
 #include <ods/ods.h>
@@ -468,6 +469,8 @@ extern uint64_t __ods_log_mask;
 static inline void sos_log(int level, const char *func, int line, char *fmt, ...)
 {
 	va_list ap;
+	pid_t tid;
+	struct timespec ts;
 
 	if (!__ods_log_fp)
 		return;
@@ -475,8 +478,11 @@ static inline void sos_log(int level, const char *func, int line, char *fmt, ...
 	if (0 ==  (level & __ods_log_mask))
 		return;
 
+	tid = (pid_t) syscall (SYS_gettid);
+	clock_gettime(CLOCK_REALTIME, &ts);
 	va_start(ap, fmt);
-	fprintf(__ods_log_fp, "sosdb[%d] @ %s:%d | ", level, func, line);
+	fprintf(__ods_log_fp, "[%d] %d.%09d: sosdb[%d] @ %s:%d | ",
+		tid, ts.tv_sec, ts.tv_nsec, level, func, line);
 	vfprintf(__ods_log_fp, fmt, ap);
 	fflush(__ods_log_fp);
 }

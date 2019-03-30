@@ -464,7 +464,7 @@ size_t ods_key_set(ods_key_t key, const void *value, size_t sz);
  * \param key	The key
  * \returns Pointer to the value of the key
  */
-static inline ods_key_value_t ods_key_value(ods_key_t key) { return key->as.ptr; }
+static inline ods_key_value_t ods_key_value(ods_key_t key) { return (ods_key_value_t)key->as.ptr; }
 
 /**
  * \brief Set the value of a key from a string
