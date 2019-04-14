@@ -1325,16 +1325,18 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 		errno = ENOSPC;
 		return NULL;
 	}
-	ods_obj = __sos_obj_new(part->obj_ods, schema->data->obj_sz,
+	ods_obj = __sos_obj_new(part->obj_ods,
+				schema->data->obj_sz + schema->data->array_data_sz,
 				&schema->sos->lock);
 	if (!ods_obj)
 		goto err_0;
-	memset(ods_obj->as.ptr, 0, schema->data->obj_sz);
+	memset(ods_obj->as.ptr, 0, schema->data->obj_sz + schema->data->array_data_sz);
 	obj_ref.ref.ods = SOS_PART(part->part_obj)->part_id;
 	obj_ref.ref.obj = ods_obj_ref(ods_obj);
 	sos_obj = __sos_init_obj(schema->sos, schema, ods_obj, obj_ref);
 	if (!sos_obj)
 		goto err_1;
+	__sos_fixup_array_values(schema, sos_obj);
 	return sos_obj;
  err_1:
 	ods_obj_delete(ods_obj);
@@ -1390,13 +1392,11 @@ int sos_obj_copy(sos_obj_t dst_obj, sos_obj_t src_obj)
 			src_value = sos_value_init(&src_v_, src_obj, src_attr);
 			if (!src_value)
 				return EINVAL;
-			dst_value = sos_array_new(&dst_v_, dst_attr, dst_obj,
-						  src_value->data->array.count);
+			dst_value = sos_value_init(&dst_v_, dst_obj, dst_attr);
 			if (!dst_value)
 				return ENOMEM;
-			memcpy(dst_value->data->array.data.byte_,
-			       src_value->data->array.data.byte_,
-			       sos_value_size(src_value));
+			memcpy(sos_array(dst_value), sos_array(src_value),
+			       sos_value_size(dst_value));
 			sos_value_put(src_value);
 			sos_value_put(dst_value);
 		}

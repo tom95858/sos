@@ -22,17 +22,17 @@ attr_list = [
     { "name" : "9", "type" : "long_double" },
     { "name" : "10", "type" : "timestamp" },
     { "name" : "11", "type" : "struct", "size" : 24 },
-    { "name" : "12", "type" : "byte_array" },
-    { "name" : "13", "type" : "char_array" },
-    { "name" : "14", "type" : "int16_array" },
-    { "name" : "15", "type" : "int32_array" },
-    { "name" : "16", "type" : "int64_array" },
-    { "name" : "17", "type" : "uint16_array" },
-    { "name" : "18", "type" : "uint32_array" },
-    { "name" : "19", "type" : "uint64_array" },
-    { "name" : "20", "type" : "float_array" },
-    { "name" : "21", "type" : "double_array" },
-    { "name" : "22", "type" : "long_double_array" }
+    { "name" : "12", "type" : "byte_array", "size" : 32 },
+    { "name" : "13", "type" : "char_array", "size" : 32  },
+    { "name" : "14", "type" : "int16_array", "size" : 32  },
+    { "name" : "15", "type" : "int32_array", "size" : 32  },
+    { "name" : "16", "type" : "int64_array", "size" : 32  },
+    { "name" : "17", "type" : "uint16_array", "size" : 32  },
+    { "name" : "18", "type" : "uint32_array", "size" : 32  },
+    { "name" : "19", "type" : "uint64_array", "size" : 32  },
+    { "name" : "20", "type" : "float_array", "size" : 32  },
+    { "name" : "21", "type" : "double_array", "size" : 32  },
+    { "name" : "22", "type" : "long_double_array", "size" : 32  }
 ]
 
 class SchemaTest(SosTestCase):

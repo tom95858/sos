@@ -25,7 +25,7 @@ class H2HTBLTest(SosTestCase):
                              [ { "name" : "tkn_id", "type" : "uint64",
                                  "index" : { "type" : "H2HTBL" } },
                                { "name" : "tkn_count", "type" : "uint64", },
-                               { "name" : "tkn_text", "type" : "char_array",
+                               { "name" : "tkn_text", "type" : "char_array", "size" : 32,
                                  "index" : { "type" : "h2htbl" } },
                            ])
         cls.schema.add(cls.db)

@@ -20,9 +20,9 @@ class JoinTestStr(SosTestCase):
         cls.setUpDb("join_test_str_cont")
         cls.schema = Sos.Schema()
         cls.schema.from_template('test_str',
-                             [ { "name" : "a_1", "type" : "string" },
-                               { "name" : "a_2", "type" : "string" },
-                               { "name" : "a_3", "type" : "string" },
+                             [ { "name" : "a_1", "type" : "string", "size" : 32 },
+                               { "name" : "a_2", "type" : "string", "size" : 32 },
+                               { "name" : "a_3", "type" : "string", "size" : 32 },
                                { "name" : "a_join", "type" : "join",
                                  "join_attrs" : [ "a_1", "a_2", "a_3" ],
                                  "index" : {}}

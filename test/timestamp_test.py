@@ -26,7 +26,7 @@ class TimestampTest(SosTestCase):
         cls.schema.from_template('timestamp_test',
                                  [
                                  { "name" : "timestamp", "type" : "timestamp", "index" : {} },
-                                 { "name" : "timestr", "type" : "char_array" }
+                                 { "name" : "timestr", "type" : "char_array", "size" : 32 }
                                  ])
         cls.schema.add(cls.db)
 
