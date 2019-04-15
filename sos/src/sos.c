@@ -1329,6 +1329,50 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 }
 
 /**
+ * \brief Allocate a SOS object in memory
+ *
+ * This call allocates a memory based object that is not stored in
+ * the container.
+ *
+ * \param schema	The schema handle
+ * \returns Pointer to the new object
+ * \returns NULL if there is an error
+ */
+sos_obj_t sos_obj_malloc(sos_schema_t schema)
+{
+	ods_obj_t ods_obj;
+	sos_obj_t sos_obj;
+
+	if (!schema) {
+		errno = EINVAL;
+		return NULL;
+	}
+	ods_obj = ods_obj_malloc(schema->data->obj_sz + schema->data->array_data_sz);
+	if (!ods_obj)
+		goto err_0;
+
+	memset(ods_obj->as.ptr, 0, schema->data->obj_sz + schema->data->array_data_sz);
+
+	sos_obj = malloc(sizeof *sos_obj);
+	if (!sos_obj)
+		goto err_1;
+
+	SOS_OBJ(ods_obj)->schema = schema->data->id;
+	sos_obj->sos = NULL;
+	sos_obj->obj = ods_obj;
+	ods_atomic_inc(&schema->data->ref_count);
+	sos_obj->schema = schema;
+	sos_obj->ref_count = 1;
+
+	__sos_fixup_array_values(schema, sos_obj);
+	return sos_obj;
+ err_1:
+	ods_obj_put(ods_obj);
+ err_0:
+	return NULL;
+}
+
+/**
  * \brief Copy the data in one object to another
  *
  * Copy all of the data from the object specified by \c src_obj
@@ -1569,8 +1613,12 @@ void sos_obj_put(sos_obj_t obj)
 {
 	if (obj && !ods_atomic_dec(&obj->ref_count)) {
 		sos_t sos = obj->sos;
-		if (!sos)
+		if (!sos) {
+			/* A memory object */
+			ods_obj_put(obj->obj);
+			free(sos);
 			return;
+		}
 		ods_obj_put(obj->obj);
 		pthread_mutex_lock(&sos->lock);
 		LIST_REMOVE(obj, entry);
