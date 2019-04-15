@@ -701,6 +701,17 @@ size_t sos_value_strlen(sos_value_t v)
 	return v->attr->strlen_fn(v);
 }
 
+void sos_obj_attr_value_set(sos_obj_t obj, sos_attr_t attr, ...)
+{
+	va_list ap;
+	sos_value_data_t vd;
+
+	va_start(ap, attr);
+	vd = sos_obj_attr_data(obj, attr, NULL);
+	(void)sos_value_data_set_va(vd, sos_attr_type(attr), ap);
+	va_end(ap);
+}
+
 size_t sos_value_data_set(sos_value_data_t vd, sos_type_t type, ...)
 {
 	size_t size;
@@ -715,6 +726,10 @@ size_t sos_value_data_set_va(sos_value_data_t vd, sos_type_t type, va_list ap)
 {
 	size_t size;
 	switch (type) {
+	case SOS_TYPE_INT16:
+		vd->prim.int16_ = va_arg(ap, int);
+		size = sizeof(vd->prim.int16_);
+		break;
 	case SOS_TYPE_INT32:
 		vd->prim.int32_ = va_arg(ap, int32_t);
 		size = sizeof(vd->prim.int32_);
@@ -724,8 +739,8 @@ size_t sos_value_data_set_va(sos_value_data_t vd, sos_type_t type, va_list ap)
 		size = sizeof(vd->prim.int64_);
 		break;
 	case SOS_TYPE_UINT16:
-		vd->prim.int16_ = va_arg(ap, int);
-		size = sizeof(vd->prim.int16_);
+		vd->prim.uint16_ = va_arg(ap, int);
+		size = sizeof(vd->prim.uint16_);
 		break;
 	case SOS_TYPE_UINT32:
 		vd->prim.uint32_ = va_arg(ap, uint32_t);
@@ -736,6 +751,9 @@ size_t sos_value_data_set_va(sos_value_data_t vd, sos_type_t type, va_list ap)
 		size = sizeof(vd->prim.uint64_);
 		break;
 	case SOS_TYPE_FLOAT:
+		vd->prim.float_ = va_arg(ap, double);
+		size = sizeof(vd->prim.float_);
+		break;
 	case SOS_TYPE_DOUBLE:
 		vd->prim.double_ = va_arg(ap, double);
 		size = sizeof(vd->prim.double_);
@@ -786,9 +804,13 @@ size_t sos_value_data_set_va(sos_value_data_t vd, sos_type_t type, va_list ap)
 		memcpy(vd->array.data.byte_, va_arg(ap, char *), size);
 		break;
 	case SOS_TYPE_OBJ_ARRAY:
+		assert(0 == "OBJ_ARRAY is not a valid value type");
+		break;
 	case SOS_TYPE_JOIN:
+		assert(0 == "JOIN is not a valid value type");
+		break;
 	default:
-		assert(0 == "JOIN is not a valid type");
+		assert(0 == "Invalid value type");
 		break;
 	}
 	return size;
