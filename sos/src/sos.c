@@ -530,25 +530,6 @@ int sos_container_new(const char *path, int o_mode)
 }
 
 /**
- * \brief Delete storage associated with a Container
- *
- * Removes all resources associated with the Container. The sos_t
- * handle must be provided (requiring an open) because it is necessary
- * to know the associated Indices in order to be able to know the
- * names of the associated files. sos_destroy() will also close \c sos, as the
- * files should be closed before begin removed.
- *
- * \param c	The container handle
- * \retval 0	The container was deleted
- * \retval EPERM The user has insufficient privilege
- * \retval EINUSE The container is in-use by other clients
- */
-int sos_container_delete(sos_t c)
-{
-	return ENOSYS;
-}
-
-/**
  * \brief Flush outstanding changes to persistent storage
  *
  * This function commits the index changes to stable storage. If
@@ -1318,8 +1299,10 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 	sos_part_t part;
 	sos_obj_ref_t obj_ref;
 
-	if (!schema || !schema->sos)
+	if (!schema || !schema->sos) {
+		errno = EINVAL;
 		return NULL;
+	}
 	part = __sos_primary_obj_part(schema->sos);
 	if (!part) {
 		errno = ENOSPC;
@@ -1467,6 +1450,18 @@ sos_obj_t sos_ref_as_obj(sos_t sos, sos_obj_ref_t ref)
 		return NULL;
 
 	return __sos_init_obj(sos, schema, ods_obj, ref);
+}
+
+/**
+ * \brief Return the object data ptr and size
+ *
+ * \param data Pointer to receive the location of the object data
+ * \param size Pointer to a size_t to receive the data size in bytes
+ */
+void sos_obj_data_get(sos_obj_t obj, char **data, size_t *size)
+{
+	*data = obj->obj->as.ptr;
+	*size = obj->schema->data->obj_sz + obj->schema->data->array_data_sz;
 }
 
 /**
