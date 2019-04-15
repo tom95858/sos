@@ -242,14 +242,6 @@ cdef class Container(SosObject):
         if rc != 0:
             self.abort(rc)
 
-    def delete(self):
-        cdef int rc
-        if self.c_cont == NULL:
-            self.abort(EINVAL)
-        rc = sos_container_delete(self.c_cont)
-        if rc != 0:
-            self.abort(rc)
-
     def close(self, commit=SOS_COMMIT_ASYNC):
         if self.c_cont == NULL:
             self.abort(EINVAL)

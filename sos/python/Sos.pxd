@@ -378,7 +378,6 @@ cdef extern from "sos/sos.h":
     sos_version_s sos_container_version(sos_t c)
     int sos_container_new(const char *path, int o_mode)
     sos_t sos_container_open(const char *path, sos_perm_t o_perm)
-    int sos_container_delete(sos_t c)
     int sos_container_stat(sos_t sos, stat *sb)
     void sos_container_close(sos_t c, sos_commit_t flags)
     int sos_container_commit(sos_t c, sos_commit_t flags)
