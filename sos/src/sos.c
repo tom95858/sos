@@ -530,25 +530,6 @@ int sos_container_new(const char *path, int o_mode)
 }
 
 /**
- * \brief Delete storage associated with a Container
- *
- * Removes all resources associated with the Container. The sos_t
- * handle must be provided (requiring an open) because it is necessary
- * to know the associated Indices in order to be able to know the
- * names of the associated files. sos_destroy() will also close \c sos, as the
- * files should be closed before begin removed.
- *
- * \param c	The container handle
- * \retval 0	The container was deleted
- * \retval EPERM The user has insufficient privilege
- * \retval EINUSE The container is in-use by other clients
- */
-int sos_container_delete(sos_t c)
-{
-	return ENOSYS;
-}
-
-/**
  * \brief Flush outstanding changes to persistent storage
  *
  * This function commits the index changes to stable storage. If
@@ -1318,26 +1299,74 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 	sos_part_t part;
 	sos_obj_ref_t obj_ref;
 
-	if (!schema || !schema->sos)
+	if (!schema || !schema->sos) {
+		errno = EINVAL;
 		return NULL;
+	}
 	part = __sos_primary_obj_part(schema->sos);
 	if (!part) {
 		errno = ENOSPC;
 		return NULL;
 	}
-	ods_obj = __sos_obj_new(part->obj_ods, schema->data->obj_sz,
+	ods_obj = __sos_obj_new(part->obj_ods,
+				schema->data->obj_sz + schema->data->array_data_sz,
 				&schema->sos->lock);
 	if (!ods_obj)
 		goto err_0;
-	memset(ods_obj->as.ptr, 0, schema->data->obj_sz);
+	memset(ods_obj->as.ptr, 0, schema->data->obj_sz + schema->data->array_data_sz);
 	obj_ref.ref.ods = SOS_PART(part->part_obj)->part_id;
 	obj_ref.ref.obj = ods_obj_ref(ods_obj);
 	sos_obj = __sos_init_obj(schema->sos, schema, ods_obj, obj_ref);
 	if (!sos_obj)
 		goto err_1;
+	__sos_fixup_array_values(schema, sos_obj);
 	return sos_obj;
  err_1:
 	ods_obj_delete(ods_obj);
+	ods_obj_put(ods_obj);
+ err_0:
+	return NULL;
+}
+
+/**
+ * \brief Allocate a SOS object in memory
+ *
+ * This call allocates a memory based object that is not stored in
+ * the container.
+ *
+ * \param schema	The schema handle
+ * \returns Pointer to the new object
+ * \returns NULL if there is an error
+ */
+sos_obj_t sos_obj_malloc(sos_schema_t schema)
+{
+	ods_obj_t ods_obj;
+	sos_obj_t sos_obj;
+
+	if (!schema) {
+		errno = EINVAL;
+		return NULL;
+	}
+	ods_obj = ods_obj_malloc(schema->data->obj_sz + schema->data->array_data_sz);
+	if (!ods_obj)
+		goto err_0;
+
+	memset(ods_obj->as.ptr, 0, schema->data->obj_sz + schema->data->array_data_sz);
+
+	sos_obj = malloc(sizeof *sos_obj);
+	if (!sos_obj)
+		goto err_1;
+
+	SOS_OBJ(ods_obj)->schema = schema->data->id;
+	sos_obj->sos = NULL;
+	sos_obj->obj = ods_obj;
+	ods_atomic_inc(&schema->data->ref_count);
+	sos_obj->schema = schema;
+	sos_obj->ref_count = 1;
+
+	__sos_fixup_array_values(schema, sos_obj);
+	return sos_obj;
+ err_1:
 	ods_obj_put(ods_obj);
  err_0:
 	return NULL;
@@ -1390,13 +1419,11 @@ int sos_obj_copy(sos_obj_t dst_obj, sos_obj_t src_obj)
 			src_value = sos_value_init(&src_v_, src_obj, src_attr);
 			if (!src_value)
 				return EINVAL;
-			dst_value = sos_array_new(&dst_v_, dst_attr, dst_obj,
-						  src_value->data->array.count);
+			dst_value = sos_value_init(&dst_v_, dst_obj, dst_attr);
 			if (!dst_value)
 				return ENOMEM;
-			memcpy(dst_value->data->array.data.byte_,
-			       src_value->data->array.data.byte_,
-			       sos_value_size(src_value));
+			memcpy(sos_array(dst_value), sos_array(src_value),
+			       sos_value_size(dst_value));
 			sos_value_put(src_value);
 			sos_value_put(dst_value);
 		}
@@ -1467,6 +1494,18 @@ sos_obj_t sos_ref_as_obj(sos_t sos, sos_obj_ref_t ref)
 		return NULL;
 
 	return __sos_init_obj(sos, schema, ods_obj, ref);
+}
+
+/**
+ * \brief Return the object data ptr and size
+ *
+ * \param data Pointer to receive the location of the object data
+ * \param size Pointer to a size_t to receive the data size in bytes
+ */
+void sos_obj_data_get(sos_obj_t obj, char **data, size_t *size)
+{
+	*data = obj->obj->as.ptr;
+	*size = obj->schema->data->obj_sz + obj->schema->data->array_data_sz;
 }
 
 /**
@@ -1574,8 +1613,12 @@ void sos_obj_put(sos_obj_t obj)
 {
 	if (obj && !ods_atomic_dec(&obj->ref_count)) {
 		sos_t sos = obj->sos;
-		if (!sos)
+		if (!sos) {
+			/* A memory object */
+			ods_obj_put(obj->obj);
+			free(sos);
 			return;
+		}
 		ods_obj_put(obj->obj);
 		pthread_mutex_lock(&sos->lock);
 		LIST_REMOVE(obj, entry);

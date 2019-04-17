@@ -71,29 +71,29 @@ static struct sos_schema_s *ischema_dir[SOS_TYPE_LAST+1];
 static struct rbt ischema_rbt;
 
 static uint32_t type_sizes[] = {
-	[SOS_TYPE_INT16] = 2,
-	[SOS_TYPE_INT32] = 4,
-	[SOS_TYPE_INT64] = 8,
-	[SOS_TYPE_UINT16] = 2,
-	[SOS_TYPE_UINT32] = 4,
-	[SOS_TYPE_UINT64] = 8,
-	[SOS_TYPE_FLOAT] = 4,
-	[SOS_TYPE_DOUBLE] = 8,
-	[SOS_TYPE_LONG_DOUBLE] = 16,
-	[SOS_TYPE_TIMESTAMP] = 8,
-	[SOS_TYPE_OBJ] = 16,
-	[SOS_TYPE_BYTE_ARRAY] = 16,
-	[SOS_TYPE_CHAR_ARRAY] = 16,
-	[SOS_TYPE_INT16_ARRAY] = 16,
-	[SOS_TYPE_INT32_ARRAY] = 16,
-	[SOS_TYPE_INT64_ARRAY] = 16,
-	[SOS_TYPE_UINT16_ARRAY] = 16,
-	[SOS_TYPE_UINT32_ARRAY] = 16,
-	[SOS_TYPE_UINT64_ARRAY] = 16,
-	[SOS_TYPE_FLOAT_ARRAY] = 16,
-	[SOS_TYPE_DOUBLE_ARRAY] = 16,
-	[SOS_TYPE_LONG_DOUBLE_ARRAY] = 16,
-	[SOS_TYPE_OBJ_ARRAY] = 16,
+	[SOS_TYPE_INT16] = sizeof(int16_t),
+	[SOS_TYPE_INT32] = sizeof(int32_t),
+	[SOS_TYPE_INT64] = sizeof(int64_t),
+	[SOS_TYPE_UINT16] = sizeof(uint16_t),
+	[SOS_TYPE_UINT32] = sizeof(uint32_t),
+	[SOS_TYPE_UINT64] = sizeof(uint64_t),
+	[SOS_TYPE_FLOAT] = sizeof(float),
+	[SOS_TYPE_DOUBLE] = sizeof(double),
+	[SOS_TYPE_LONG_DOUBLE] = sizeof(long double),
+	[SOS_TYPE_TIMESTAMP] = sizeof(struct sos_timeval_s),
+	[SOS_TYPE_OBJ] = sizeof(sos_obj_ref_t),
+	[SOS_TYPE_BYTE_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_CHAR_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_INT16_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_INT32_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_INT64_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_UINT16_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_UINT32_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_UINT64_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_FLOAT_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_DOUBLE_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_LONG_DOUBLE_ARRAY] = sizeof(struct sos_array_info_s),
+	[SOS_TYPE_OBJ_ARRAY] = sizeof(struct sos_array_info_s),
 };
 
 /**
@@ -399,6 +399,8 @@ static sos_attr_t _attr_by_idx(sos_schema_t schema, int attr_id)
 	return NULL;
 }
 
+#define SOS_ARRAY_MIN_SIZE (32)
+
 /**
  * \brief Add an attribute to a schema
  *
@@ -408,7 +410,7 @@ static sos_attr_t _attr_by_idx(sos_schema_t schema, int attr_id)
  *    rc = sos_schema_attr_add(s, "an_int32_attr", SOS_TYPE_INT32);
  *    rc = sos_schema_attr_add(s, "a_float_attr", SOS_TYPE_FLOAT);
  *    rc = sos_schema_attr_add(s, "a_struct_attr", SOS_TYPE_STRUCT, 24);   // 24B untyped value
- *    rc = sos_schema_attr_add(s, "a_float_array", SOS_TYPE_FLOAT_ARRAY);  // Arrays have strict element type, but variable length
+ *    rc = sos_schema_attr_add(s, "a_float_array", SOS_TYPE_FLOAT_ARRAY, 32);  // Arrays have strict element types
  *    char *join[] = {
  *          "an_int32_attr", "a_float_attr"
  *    };
@@ -436,8 +438,9 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 {
 	sos_attr_t attr;
 	va_list ap;
-	size_t size;
+	size_t size, array_data_sz, el_sz;
 	int i, join_count;
+	int count = 0;
 	char **join_attrs;
 	sos_array_t ext_ptr = NULL;
 
@@ -452,7 +455,80 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 	if (type > SOS_TYPE_LAST)
 		return EINVAL;
 
+	size = el_sz = array_data_sz = 0;
 	switch (type) {
+	case SOS_TYPE_BYTE_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(unsigned char);
+		array_data_sz = sizeof(struct sos_array_s) + count;
+		break;
+	case SOS_TYPE_CHAR_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(char);
+		array_data_sz = sizeof(struct sos_array_s) + count;
+		break;
+	case SOS_TYPE_INT16_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(int16_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * el_sz);
+		break;
+	case SOS_TYPE_UINT16_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(uint16_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(uint16_t));
+		break;
+	case SOS_TYPE_INT32_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(int32_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(int32_t));
+		break;
+	case SOS_TYPE_UINT32_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(uint32_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(uint32_t));
+		break;
+	case SOS_TYPE_FLOAT_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(float);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(float));
+		break;
+	case SOS_TYPE_INT64_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(int64_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(int64_t));
+		break;
+	case SOS_TYPE_UINT64_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(uint64_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(uint64_t));
+		break;
+	case SOS_TYPE_DOUBLE_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(double);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(double));
+		break;
+	case SOS_TYPE_LONG_DOUBLE_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(long double);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(long double));
+		break;
+	case SOS_TYPE_OBJ_ARRAY:
+		va_start(ap, type);
+		count = va_arg(ap, size_t);
+		el_sz = sizeof(sos_obj_ref_t);
+		array_data_sz = sizeof(struct sos_array_s) + (count * sizeof(sos_obj_ref_t));
+		break;
 	case SOS_TYPE_STRUCT:
 		va_start(ap, type);
 		size = va_arg(ap, size_t);
@@ -465,7 +541,7 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 		join_count = va_arg(ap, size_t);
 		join_attrs = va_arg(ap, char **);
 		size = 0;	/* JOIN attrs consume no space in the object */
-		ext_ptr = malloc(SOS_ARRAY_SIZE(join_count, uint32_t));
+		ext_ptr = malloc(SOS_JOIN_EXT_SIZE(join_count));
 		if (!ext_ptr)
 			return ENOMEM;
 		ext_ptr->count = join_count;
@@ -486,7 +562,6 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 		}
 		break;
 	default:
-		size = 0;
 		break;
 	}
 	attr = attr_new(schema, type, size);
@@ -497,6 +572,8 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 	}
 	strcpy(attr->data->name, name);
 	attr->data->type = type;
+	attr->data->el_sz = el_sz;
+	attr->data->count = count;
 	attr->data->id = schema->data->attr_cnt++;
 	attr->ext_ptr = ext_ptr;
 	if (!TAILQ_EMPTY(&schema->attr_list)) {
@@ -510,7 +587,8 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 	if (a_size > schema->data->key_sz)
 		schema->data->key_sz = a_size;
 	schema->data->obj_sz = attr->data->offset + attr->data->size;
-
+	array_data_sz = (array_data_sz + 3) & ~3; /* round up to a multiple of 4B */
+	schema->data->array_data_sz += array_data_sz;
 	/* Append new attribute to tail of list */
 	TAILQ_INSERT_TAIL(&schema->attr_list, attr, entry);
 	return 0;
@@ -774,11 +852,6 @@ void *sos_obj_ptr(sos_obj_t obj)
 	return data->data;
 }
 
-size_t sos_array_count(sos_value_t val)
-{
-	return val->data->array.count;
-}
-
 /*
  * Allocate an ODS object of the requested size and extend the store if necessary
  * NB: The lock protects multiple threads from attempting to extend if the
@@ -801,57 +874,15 @@ ods_obj_t __sos_obj_new(ods_t ods, size_t size, pthread_mutex_t *lock)
 
 sos_value_t sos_array_new(sos_value_t val, sos_attr_t attr, sos_obj_t obj, size_t count)
 {
-	size_t size;
-	struct sos_array_s *array;
-	ods_obj_t array_obj;
-	sos_schema_t schema;
 	if (!sos_attr_is_array(attr)) {
 		errno = EINVAL;
 		return NULL;
 	}
-	schema = __sos_get_ischema(attr->data->type);
-	size = sizeof(struct sos_obj_data_s)
-		+ sizeof(uint32_t) /* element count */
-		+ (count * schema->data->el_sz); /* array elements */
-
-	if (!obj) {
-		array = calloc(1, size);
-		if (!array)
-			goto err;
-		array->count = count;
-		val->attr = attr;
-		val->data = (sos_value_data_t)array;
-		val->obj = NULL;
-		return val;
+	if (count > attr->data->count) {
+		errno = E2BIG;
+		return NULL;
 	}
-	array_obj = __sos_obj_new(ods_obj_ods(obj->obj), size, &obj->sos->lock);
-	if (!array_obj)
-		goto err;
-
-	val->attr = attr;
-	val->data = (sos_value_data_t)&obj->obj->as.bytes[attr->data->offset];
-
-	array = (struct sos_array_s *)&SOS_OBJ(array_obj)->data[0];
-	array->count = count;
-
-	/* Free the old array contents if present */
-	if (val->data->prim.ref_.ref.obj) {
-		ods_t ods = __sos_ods_from_ref(obj->sos, val->data->prim.ref_.ref.ods);
-		ods_ref_delete(ods, val->data->prim.ref_.ref.obj);
-	}
-	/* Update the array reference in the containing object */
-	val->data->prim.ref_.ref.ods = obj->obj_ref.ref.ods;
-	val->data->prim.ref_.ref.obj = ods_obj_ref(array_obj);
-
-	/* Point the value at the new array */
-	val->obj = __sos_init_obj(obj->sos, schema, array_obj, val->data->prim.ref_);
-	if (!val->obj)
-		goto err;
-	val->data = (sos_value_data_t)&SOS_OBJ(array_obj)->data[0];
-	return val;
- err:
-	errno = ENOMEM;
-	return NULL;
+	return sos_value_init(val, obj, attr);
 }
 
 sos_obj_t sos_array_obj_new(sos_t sos, sos_type_t type, size_t count)
@@ -912,6 +943,17 @@ sos_index_t sos_attr_index(sos_attr_t attr)
 size_t sos_attr_size(sos_attr_t attr)
 {
 	return attr->data->size;
+}
+
+/**
+ * \brief Return the array element count
+ *
+ * \param attr The sos_attr_t handle
+ * \returns The array size
+ */
+size_t sos_attr_count(sos_attr_t attr)
+{
+	return attr->data->count;
 }
 
 /**
@@ -1099,7 +1141,7 @@ sos_schema_t sos_schema_dup(sos_schema_t schema)
 		if (attr->data->indexed)
 			TAILQ_INSERT_TAIL(&dup->idx_attr_list, attr, idx_entry);
 		if (src_attr->ext_ptr) {
-			size_t join_ext_sz = SOS_ARRAY_SIZE(src_attr->ext_ptr->count, uint32_t);
+			size_t join_ext_sz = SOS_JOIN_EXT_SIZE(src_attr->ext_ptr->count);
 			sos_array_t join_ext = malloc(join_ext_sz);
 			if (!join_ext)
 				goto err_1;
@@ -1167,7 +1209,7 @@ sos_schema_t __sos_schema_init(sos_t sos, ods_obj_t schema_obj)
 				goto err_1;
 			}
 			ext = ODS_PTR(sos_array_t, ext_obj);
-			ext_sz = SOS_ARRAY_SIZE(ext->count, uint32_t);
+			ext_sz = SOS_JOIN_EXT_SIZE(ext->count);
 			attr->ext_ptr = malloc(ext_sz);
 			if (!attr->ext_ptr) {
 				errno = ENOMEM;
@@ -1201,6 +1243,25 @@ sos_schema_t __sos_schema_init(sos_t sos, ods_obj_t schema_obj)
  err_0:
 	free(schema);
 	return NULL;
+}
+
+void __sos_fixup_array_values(sos_schema_t schema, sos_obj_t obj)
+{
+	sos_value_data_t data;
+	sos_attr_t attr;
+	size_t array_start = schema->data->obj_sz;
+	TAILQ_FOREACH(attr, &schema->attr_list, entry) {
+		if (!sos_attr_is_array(attr))
+			continue;
+
+		data = (sos_value_data_t)&obj->obj->as.bytes[attr->data->offset];
+		data->array_info.offset = array_start;
+		data->array_info.size = sizeof(struct sos_array_s) + (attr->data->el_sz * attr->data->count);
+		sos_array_t a = (sos_array_t)&(obj->obj->as.bytes[array_start]);
+		a->count = attr->data->count;
+
+		array_start += (data->array_info.size + 3) & ~3;
+	}
 }
 
 int __sos_schema_open(sos_t sos, sos_schema_t schema)
@@ -1417,6 +1478,7 @@ int sos_schema_add(sos_t sos, sos_schema_t schema)
 	SOS_SCHEMA(schema_obj)->ref_count = 0;
 	SOS_SCHEMA(schema_obj)->schema_sz = size;
 	SOS_SCHEMA(schema_obj)->obj_sz = schema->data->obj_sz;
+	SOS_SCHEMA(schema_obj)->array_data_sz = schema->data->array_data_sz;
 	SOS_SCHEMA(schema_obj)->el_sz = schema->data->el_sz;
 	SOS_SCHEMA(schema_obj)->attr_cnt = schema->data->attr_cnt;
 	SOS_SCHEMA(schema_obj)->id =
@@ -1435,7 +1497,7 @@ int sos_schema_add(sos_t sos, sos_schema_t schema)
 		*attr_data = *attr->data;
 		if (attr->ext_ptr) {
 			int i;
-			size_t ext_sz = SOS_ARRAY_SIZE(attr->ext_ptr->count, uint32_t);
+			size_t ext_sz = SOS_JOIN_EXT_SIZE(attr->ext_ptr->count);
 			ods_obj_t ext_obj = ods_obj_alloc(ods_obj_ods(schema_obj), ext_sz);
 			sos_array_t join = ODS_PTR(sos_array_t, ext_obj);
 			join->count = attr->ext_ptr->count;
@@ -1585,6 +1647,7 @@ void sos_schema_print(sos_schema_t schema, FILE *fp)
 	fprintf(fp, "    name      : %s\n", schema->data->name);
 	fprintf(fp, "    schema_sz : %ld\n", schema->data->schema_sz);
 	fprintf(fp, "    obj_sz    : %ld\n", schema->data->obj_sz);
+	fprintf(fp, "array_data_sz : %ld\n", schema->data->array_data_sz);
 	fprintf(fp, "    id        : %d\n", schema->data->id);
 	TAILQ_FOREACH(attr, &schema->attr_list, entry) {
 		fprintf(fp, "    -attribute : %s\n", attr->data->name);

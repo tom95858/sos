@@ -29,17 +29,17 @@ class ObjTestSetGet(SosTestCase):
             { "name" : "long_double", "type" : "long_double" },
             { "name" : "timestamp", "type" : "timestamp" },
             { "name" : "struct", "type" : "struct", "size" : 24 },
-            { "name" : "byte_array", "type" : "byte_array" },
-            { "name" : "char_array", "type" : "char_array" },
-            { "name" : "int16_array", "type" : "int16_array" },
-            { "name" : "int32_array", "type" : "int32_array" },
-            { "name" : "int64_array", "type" : "int64_array" },
-            { "name" : "uint16_array", "type" : "uint16_array" },
-            { "name" : "uint32_array", "type" : "uint32_array" },
-            { "name" : "uint64_array", "type" : "uint64_array" },
-            { "name" : "float_array", "type" : "float_array" },
-            { "name" : "double_array", "type" : "double_array" },
-            { "name" : "long_double_array", "type" : "long_double_array" }
+            { "name" : "byte_array", "type" : "byte_array", "size" : 32 },
+            { "name" : "char_array", "type" : "char_array", "size" : 32 },
+            { "name" : "int16_array", "type" : "int16_array", "size" : 32 },
+            { "name" : "int32_array", "type" : "int32_array", "size" : 32 },
+            { "name" : "int64_array", "type" : "int64_array", "size" : 32 },
+            { "name" : "uint16_array", "type" : "uint16_array", "size" : 32 },
+            { "name" : "uint32_array", "type" : "uint32_array", "size" : 32 },
+            { "name" : "uint64_array", "type" : "uint64_array", "size" : 32 },
+            { "name" : "float_array", "type" : "float_array", "size" : 32 },
+            { "name" : "double_array", "type" : "double_array", "size" : 32 },
+            { "name" : "long_double_array", "type" : "long_double_array", "size" : 32 }
         ])
         cls.schema.add(cls.db)
 

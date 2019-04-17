@@ -15,17 +15,17 @@ class ArrayTest(SosTestCase):
         cls.setUpDb("array_test_cont")
         cls.schema = Sos.Schema()
         cls.schema.from_template('array_test', [
-            { "name" : "byte_array", "type" : "byte_array" },
-            { "name" : "char_array", "type" : "char_array", "index": {} },
-            { "name" : "int16_array", "type" : "int16_array" },
-            { "name" : "int32_array", "type" : "int32_array" },
-            { "name" : "int64_array", "type" : "int64_array" },
-            { "name" : "uint16_array", "type" : "uint16_array" },
-            { "name" : "uint32_array", "type" : "uint32_array" },
-            { "name" : "uint64_array", "type" : "uint64_array" },
-            { "name" : "float_array", "type" : "float_array" },
-            { "name" : "double_array", "type" : "double_array" },
-            { "name" : "long_double_array", "type" : "long_double_array" }
+            { "name" : "byte_array", "type" : "byte_array", "size" : 32 },
+            { "name" : "char_array", "type" : "char_array", "index": {}, "size" : 32 },
+            { "name" : "int16_array", "type" : "int16_array", "size" : 32 },
+            { "name" : "int32_array", "type" : "int32_array", "size" : 32 },
+            { "name" : "int64_array", "type" : "int64_array", "size" : 32 },
+            { "name" : "uint16_array", "type" : "uint16_array", "size" : 32 },
+            { "name" : "uint32_array", "type" : "uint32_array", "size" : 32 },
+            { "name" : "uint64_array", "type" : "uint64_array", "size" : 32 },
+            { "name" : "float_array", "type" : "float_array", "size" : 32 },
+            { "name" : "double_array", "type" : "double_array", "size" : 32 },
+            { "name" : "long_double_array", "type" : "long_double_array", "size" : 32 }
         ])
         cls.schema.add(cls.db)
 
@@ -99,6 +99,21 @@ class ArrayTest(SosTestCase):
                     b = o[i]
                     self.assertEqual(a[j], b[j])
             o = f.next()
+
+    def test_04_too_big(self):
+        attr = self.schema['char_array']
+        f = attr.filter()
+        o = f.begin()
+        v = "1234567890123456789012345678901234567890"
+        try:
+            o['char_array'] = v
+        except:
+            pass
+            return
+        raise ValueError("The {0} array can only accomodate "
+                         "{1} members, {2} were provided".\
+                         format(attr.name(), attr.count(), len(v)))
+        self.assertEqual("", "The value is too big and should have thrown an exception")
 
 if __name__ == "__main__":
     LOGFMT = '%(asctime)s %(name)s %(levelname)s: %(message)s'

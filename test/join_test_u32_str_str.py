@@ -21,8 +21,8 @@ class JoinTestU32_Str_Str(SosTestCase):
         cls.schema = Sos.Schema()
         cls.schema.from_template('test_u32_str_str',
                              [ { "name" : "a_1", "type" : "uint32" },
-                               { "name" : "a_2", "type" : "string" },
-                               { "name" : "a_3", "type" : "string" },
+                               { "name" : "a_2", "type" : "string", "size" : 32 },
+                               { "name" : "a_3", "type" : "string", "size" : 32 },
                                { "name" : "a_join", "type" : "join",
                                  "join_attrs" : [ "a_1", "a_2", "a_3" ],
                                  "index" : {}}

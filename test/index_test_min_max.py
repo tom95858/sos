@@ -27,7 +27,7 @@ class IndexTestMinMax(SosTestCase):
                                  { "name" : "uint64", "type" : "uint64", "index" : {} },
                                  { "name" : "int64", "type" : "int64", "index" : {} },
                                  { "name" : "double", "type" : "double", "index" : {} },
-                                 { "name" : "string", "type" : "string", "index" : {} },
+                                 { "name" : "string", "type" : "string", "index" : {}, "size" : 32 },
                              ])
         cls.schema.add(cls.db)
 
