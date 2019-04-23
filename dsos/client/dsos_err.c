@@ -1,5 +1,10 @@
 #include "dsos_priv.h"
 
+/*
+ * This allocates a vector with the last status of each DSOS
+ * server from the most recent operation.
+ */
+
 static __thread int	*statuses = NULL;
 
 static inline void err_alloc(void)

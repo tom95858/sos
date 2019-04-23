@@ -81,7 +81,10 @@ int main(int ac, char *av[])
 	ts.tv_sec  = nsecs / 1000000000;
 	ts.tv_nsec = nsecs % 1000000000;
 
-	dsos_init(config);
+	if (dsos_init(config)) {
+		fprintf(stderr, "could not establish connections to all DSOS servers\n");
+		exit(1);
+	}
 
 	if (ping)
 		do_ping_rpc();
@@ -141,7 +144,7 @@ void obj_cb(dsos_obj_t *obj, void *ctxt)
 	sem_post(&sem);
 }
 
-void create_cont(char *path, int perms)
+dsos_t *create_cont(char *path, int perms)
 {
 	int		i, ret, sz;
 	dsos_t		*cont;
@@ -239,39 +242,92 @@ void create_cont(char *path, int perms)
 
 	free(t);
 
-	dsos_container_close(cont);
+	return cont;
 }
 
 void do_obj_creates()
 {
 	int		i, ret, sz, num = 12666;
+	char		*mydata;
 	dsos_obj_t	*obj;
 	dsos_t		*cont;
 	dsos_schema_t	*schema_big, *schema_small;
+	sos_attr_t	big_attr1, big_attr2, small_attr1;
 	sos_schema_template_t t;
 
-	cont = dsos_container_open("/tmp/cont.sos", 0775);
+	printf("opening container\n");
+	cont = dsos_container_open("/tmp/cont.sos", 0755);
 	if (!cont) {
 		printf("creating container\n");
-		create_cont("/tmp/cont.sos", 0775);
+		cont = create_cont("/tmp/cont.sos", 0755);
+		if (!cont) {
+			fprintf(stderr, "could not create container\n");
+			exit(1);
+		}
 	}
-	cont = dsos_container_open("/tmp/cont.sos", 0775);
-	if (!cont) {
-		fprintf(stderr, "could not open container\n");
-		exit(1);
-	}
+	printf("getting schema small\n");
 	schema_small = dsos_schema_by_name(cont, "small");
 	if (!schema_small) {
 		fprintf(stderr, "could not open schema 'small'\n");
 		exit(1);
 	}
+	printf("getting schema big\n");
 	schema_big = dsos_schema_by_name(cont, "big");
 	if (!schema_big) {
 		fprintf(stderr, "could not open schema 'big'\n");
 		exit(1);
 	}
 
-	sem_init(&sem, 0, 4);
+	printf("creating objs\n");
+	// Make objs from the schema "small".
+	sz = sizeof(uint64_t);
+	small_attr1 = sos_schema_attr_by_name(schema_small->schema, "attr1");
+	if (!small_attr1) {
+		fprintf(stderr, "could not get attr1 from schema_small\n");
+		exit(1);
+	}
+	big_attr1 = sos_schema_attr_by_name(schema_big->schema, "attr1");
+	if (!big_attr1) {
+		fprintf(stderr, "could not get attr1 from schema_big\n");
+		exit(1);
+	}
+	big_attr2 = sos_schema_attr_by_name(schema_big->schema, "attr2");
+	if (!big_attr2) {
+		fprintf(stderr, "could not get attr2 from schema_big\n");
+		exit(1);
+	}
+	mydata = malloc(4000);
+	sem_init(&sem, 0, 0);
+	for (i = 0; i < num_iters; ++i) {
+		obj = dsos_obj_alloc(schema_small, obj_cb, NULL);
+		if (!obj) {
+			fprintf(stderr, "could not create small object");
+			exit(1);
+		}
+		sos_obj_attr_value_set(obj->sos_obj, small_attr1, num++);
+		ret = dsos_obj_create(obj);
+		if (ret)
+			fprintf(stderr, "dsos_obj_create %d\n", ret);
+#if 1
+		obj = dsos_obj_alloc(schema_big, obj_cb, NULL);
+		if (!obj) {
+			fprintf(stderr, "could not create big object");
+			exit(1);
+		}
+		sos_obj_attr_value_set(obj->sos_obj, big_attr1, num++);
+		sos_obj_attr_value_set(obj->sos_obj, big_attr2, 4000, mydata);
+		ret = dsos_obj_create(obj);
+		if (ret)
+			fprintf(stderr, "dsos_obj_create %d\n", ret);
+#endif
+		nanosleep(&ts, NULL);
+	}
+	// Wait until all object-creation callbacks have occurred.
+	for (i = 0; i < 2*num_iters; ++i)
+		sem_wait(&sem);
+	dsos_container_close(cont);
+#if 0
+	// This loop creates random-sized objects.
 	while (num_iters--) {
 		if (len < 0)
 			sz = random() * (-len-64) / RAND_MAX + 64;
@@ -307,4 +363,5 @@ void do_obj_creates()
 	sem_wait(&sem);
 	sem_wait(&sem);
 	dsos_container_close(cont);
+#endif
 }

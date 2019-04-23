@@ -188,6 +188,7 @@ int dsos_rpc_schema_by_name(rpc_schema_by_name_in_t  *args_inp,
 		args_outp->handles[i] = resp->handle;
 		dsos_err_set(i, resp->hdr.status);
 	}
+	memcpy(args_outp->templ, resp->templ, sizeof(args_outp->templ));
 
 	dsos_req_all_put(req_all);
 	return dsos_err_status();
@@ -207,7 +208,7 @@ int dsos_rpc_schema_from_template(rpc_schema_from_template_in_t  *args_inp,
 	for (i = 0; i < g.num_servers; ++i) {
 		msg = (dsosd_msg_schema_from_template_req_t *)req_all->reqs[i]->msg;
 		msg->hdr.type = DSOSD_MSG_SCHEMA_FROM_TEMPLATE_REQ;
-		memcpy(msg->template, args_inp->template, args_inp->len);
+		memcpy(msg->templ, args_inp->templ, args_inp->len);
 	}
 
 	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_schema_from_template_req_t));
@@ -380,17 +381,20 @@ int dsos_rpc_part_set_state(rpc_part_set_state_in_t  *args_inp,
 int dsos_rpc_object_create(rpc_object_create_in_t  *args_inp)
 {
 	int				server_id;
+	char				*obj_data;
+	size_t				obj_sz;
 	dsos_obj_t			*obj;
 	dsosd_msg_obj_create_req_t	*msg;
 	size_t				req_len;
 	uint8_t				sha[SHA256_DIGEST_LENGTH];
 
 	obj = args_inp->obj;
+	sos_obj_data_get(obj->sos_obj, &obj_data, &obj_sz);
 
 	/* Calculate the owning DSOS server. */
-	SHA256(obj->buf, args_inp->len, sha);
+	SHA256(obj->buf, obj_sz, sha);
 	server_id = sha[0] % g.num_servers;
-	dsos_debug("obj %p len %d owned by server %d\n", obj, args_inp->len, server_id);
+	dsos_debug("obj %p obj_sz %d owned by server %d\n", obj, obj_sz, server_id);
 
 	/*
 	 * Copy in args to the request message. If the object is in-line,
@@ -398,12 +402,12 @@ int dsos_rpc_object_create(rpc_object_create_in_t  *args_inp)
 	 */
 	msg = (dsosd_msg_obj_create_req_t *)obj->req->msg;
 	msg->hdr.type      = DSOSD_MSG_OBJ_CREATE_REQ;
-	msg->len           = args_inp->len;
-	msg->schema_handle = args_inp->schema->handles[server_id];
+	msg->len           = obj_sz;
+	msg->schema_handle = obj->schema->handles[server_id];
 
 	req_len = sizeof(dsosd_msg_obj_create_req_t);
 	if (msg->hdr.flags & DSOSD_MSG_IMM)
-		req_len += args_inp->len;
+		req_len += obj_sz;
 
 	/* This can block until resources (SQ credits) are available. */
 	return dsos_req_submit(obj->req, &g.conns[server_id], req_len);
@@ -461,12 +465,6 @@ static char *deserialize_str(char **pbuf, size_t *psz)
 {
 	char		*ret = *pbuf;
 	size_t		len = strlen(ret) + 1;
-
-	// XXX strdup the string, and free later. we can't keep a pointer
-	// into buf b/c it's part of a req's buffer which won't live forever
-	// on 2nd thought: this is ok, since we'll be using the template
-	// and done with it before the handler returns (the template gets
-	// mapped to a local sos_schema_t handle)
 
 	if (len == 1)
 		ret = NULL;

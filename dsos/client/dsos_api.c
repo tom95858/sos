@@ -58,8 +58,8 @@ dsos_schema_t *dsos_schema_by_name(dsos_t *cont, const char *name)
 	if (ret)
 		return NULL;
 
-	template = dsos_rpc_deserialize_schema_template(args_out.template,
-							sizeof(args_out.template));
+	template = dsos_rpc_deserialize_schema_template(args_out.templ,
+							sizeof(args_out.templ));
 
 	schema = (dsos_schema_t *)malloc(sizeof(dsos_schema_t));
 	if (!schema)
@@ -91,8 +91,8 @@ dsos_schema_t *dsos_schema_from_template(sos_schema_template_t t)
 	rpc_schema_from_template_in_t		args_in;
 	rpc_schema_from_template_out_t		args_out;
 
-	template_sz = sizeof(args_in.template);
-	p = dsos_rpc_serialize_schema_template(t, args_in.template, &template_sz);
+	template_sz = sizeof(args_in.templ);
+	p = dsos_rpc_serialize_schema_template(t, args_in.templ, &template_sz);
 	if (!p)
 		return NULL; // too large to serialize
 	args_in.len = template_sz;

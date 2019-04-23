@@ -61,6 +61,7 @@
 #include <sys/queue.h>
 #include <endian.h>
 #include <stdarg.h>
+#include <unistd.h>
 #include <sys/syscall.h>
 
 #include <sos/sos.h>

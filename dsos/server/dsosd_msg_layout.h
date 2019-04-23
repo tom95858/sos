@@ -134,7 +134,7 @@ typedef struct dsosd_msg_part_set_state_resp {
 
 typedef struct dsosd_msg_schema_from_template_req {
 	dsosd_msg_hdr_t		hdr;
-	char			template[DSOSD_MSG_MAX_DATA];
+	char			templ[DSOSD_MSG_MAX_DATA];
 } dsosd_msg_schema_from_template_req_t;
 
 typedef struct dsosd_msg_schema_from_template_resp {
@@ -161,7 +161,7 @@ typedef struct dsosd_msg_schema_by_name_req {
 typedef struct dsosd_msg_schema_by_name_resp {
 	dsosd_msg_hdr_t		hdr;
 	dsosd_handle_t		handle;
-	char			template[DSOSD_MSG_MAX_DATA];
+	char			templ[DSOSD_MSG_MAX_DATA];
 } dsosd_msg_schema_by_name_resp_t;
 
 typedef struct dsosd_msg_obj_create_req {

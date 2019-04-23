@@ -151,12 +151,12 @@ static void handle_connect_req(zap_ep_t ep)
 	zap_set_ucontext(ep, client);
 
 #if 1
-	// map a local buffer we can RMA in to
+	// XXX map a local buffer we can RMA in to
 	size_t sz = 1024 * 1024;
 	client->testbuf = malloc(sz);
 	zap_err_t zerr = zap_map(ep, &client->lmap, client->testbuf, sz, ZAP_ACCESS_NONE);
 	if (zerr)
-		printf("Bo: zap_map %d\n", zerr);
+		printf("zap_map err %d %s\n", zerr, zap_err_str(zerr));
 #endif
 }
 
@@ -193,12 +193,13 @@ static void handle_disconnected(zap_ep_t ep)
 	inet_ntop(rsin.sin_family, &rsin.sin_addr, mybuf, sizeof(mybuf));
 	dsosd_debug("disconnect %s:%d\n", mybuf, ntohs(rsin.sin_port));
 #endif
+#if 1
 	// XXX
 	if (client->lmap)
 		zap_unmap(ep, client->lmap);
 	if (client->testbuf)
 		free(client->testbuf);
-
+#endif
 	zap_free(ep);
 	dsosd_client_put(client);
 	--g.num_clients;
@@ -228,20 +229,22 @@ static void handle_rendezvous(zap_ep_t ep, zap_map_t map, void *buf, size_t len)
 static void handle_read_complete(zap_ep_t ep, void *ctxt)
 {
 	int		ret;
+	char		*obj_data;
+	size_t		obj_max_sz;
 	dsosd_req_t	*req = (dsosd_req_t *)ctxt;
 	sos_obj_t	obj  = (sos_obj_t)req->ctxt;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	/* Remove these soon. For testing only. */
-
-	ret = sos_obj_attr_by_name_from_str(obj, "attr1", client->testbuf, NULL);
-	if (ret)
-		dsosd_error("ep %p could not set attr1\n", ep);
-
-	ret = sos_obj_attr_by_name_from_str(obj, "attr2", client->testbuf + 10, NULL);
-	if (ret)
-		dsosd_error("ep %p could not set attr2\n", ep);
-
+#if 1
+	/*
+	 * Until SOS can map the mmap backing objects, copy the object
+	 * from a temp buffer to the real object store. We'll RMA-read
+	 * directly into the object once SOS is capable of mapping it.
+	 */
+	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
+	memcpy(obj_data, client->testbuf, req->resp->u.obj_create_resp.len);
+	*(uint64_t *)obj_data = sos_schema_id(obj->schema);
+#endif
 	ret = sos_obj_index(obj);
 	if (ret)
 		dsosd_error("ep %p sos_obj_index ret %d\n", ret);

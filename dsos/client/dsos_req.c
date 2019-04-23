@@ -7,6 +7,10 @@
  * Each request is assigned a client-unique 64-bit integer id which
  * is reflected back by the server in its response. This lets us
  * map the response message back to the original request.
+ *
+ * An N-fanout request (dsos_req_all_t) is a request vector used to
+ * implement RPCs to all DSOS servers. These are always slow-path
+ * operations like opening a container.
  */
 
 static struct rbt	req_rbt;
@@ -205,7 +209,7 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 		/* Note: the callback above is responsible for the dsos_req_all_put(req_all). */
 	}
 
-#ifdef DEBUG
+#ifdef DSOS_DEBUG
 	if (resp) {
 		dsos_debug("req %p len %d ctxt %p msg %p id %ld type %d status %d copied to %p\n",
 			   req, len, ctxt, req->msg, resp, resp->u.hdr.id,

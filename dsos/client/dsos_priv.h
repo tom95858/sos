@@ -19,7 +19,7 @@ typedef struct dsos_obj_s	dsos_obj_t;
 typedef struct dsos_s		dsos_t;
 typedef struct dsos_schema_s	dsos_schema_t;
 
-/* This will be a zap_new() parameter soon. */
+/* This will be a zap_new() parameter eventually. */
 #define SQ_DEPTH	4
 
 #define DSOS_DEFAULT_SHARED_HEAP_SZ		48*1024*1024
@@ -67,8 +67,7 @@ typedef struct dsos_req_s {
 } dsos_req_t;
 
 /*
- * An n-way work request. This is a list of dsos_req_t's above, one
- * for each server.
+ * An n-way work request. This is a vector of work requests, one per server.
  */
 typedef void (*dsos_req_all_cb_t)(dsos_req_all_t *, void *);  // response callback fn
 typedef struct dsos_req_all_s {
@@ -110,9 +109,9 @@ typedef struct dsos_part_s {
  * one per server.
  */
 typedef struct dsos_schema_s {
-	dsos_t		*cont;
-	dsosd_handle_t	*handles;
-	sos_schema_t	schema;
+	dsos_t		*cont;                // container
+	dsosd_handle_t	*handles;             // vector of server handles
+	sos_schema_t	schema;               // local SOS schema handle
 } dsos_schema_t;
 
 /*
@@ -124,9 +123,10 @@ typedef enum {
 typedef void (*dsos_obj_cb_t)(dsos_obj_t *, void *);
 typedef struct dsos_obj_s {
 	dsos_obj_type_t		flags;
+	sos_obj_t		sos_obj;       // the actual SOS object
+	dsos_schema_t		*schema;
+	// The following field is temporary until SOS can alloc objs from our shared heap.
 	char			*buf;          // pointer to data (shared heap or a send buffer)
-	size_t			max_sz;        // size of buffer allocated
-	size_t			actual_sz;     // actual # bytes used
 	dsos_req_t		*req;          // server req to create this obj
 	dsos_obj_cb_t		cb;            // response callback
 	void			*ctxt;         // for callbacks
@@ -202,14 +202,14 @@ typedef struct {
 } rpc_schema_by_name_in_t;
 typedef struct {
 	dsosd_handle_t	*handles;
-	char		template[DSOSD_MSG_MAX_DATA];
+	char		templ[DSOSD_MSG_MAX_DATA];
 } rpc_schema_by_name_out_t;
 int	dsos_rpc_schema_by_name(rpc_schema_by_name_in_t  *args_inp,
 				rpc_schema_by_name_out_t *args_outp);
 
 typedef struct {
 	uint32_t	len;
-	char		template[DSOSD_MSG_MAX_DATA];
+	char		templ[DSOSD_MSG_MAX_DATA];
 } rpc_schema_from_template_in_t;
 typedef struct {
 	dsosd_handle_t	*handles;
@@ -219,8 +219,6 @@ int	dsos_rpc_schema_from_template(rpc_schema_from_template_in_t  *args_inp,
 
 typedef struct {
 	dsos_obj_t	*obj;
-	dsos_schema_t	*schema;
-	size_t		len;
 } rpc_object_create_in_t;
 typedef struct {
 	uint64_t	obj_id;
@@ -273,7 +271,7 @@ int		dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len);
 dsos_req_all_t	*dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt);
 void		dsos_req_all_put(dsos_req_all_t *req_all);
 int		dsos_req_all_submit(dsos_req_all_t *req_all, size_t len);
-void *dsos_rpc_serialize_schema_template(sos_schema_template_t template, void *buf, size_t *psz);
+void *dsos_rpc_serialize_schema_template(sos_schema_template_t templ, void *buf, size_t *psz);
 sos_schema_template_t dsos_rpc_deserialize_schema_template(char *buf, size_t len);
 
 /* Public API. */
@@ -281,14 +279,17 @@ int		dsos_container_close(dsos_t *dsos);
 dsos_t		*dsos_container_open(const char *path, sos_perm_t perms);
 void		dsos_disconnect(void);
 int		dsos_init(const char *config_filename);
-dsos_obj_t	*dsos_obj_alloc(size_t sz, dsos_obj_cb_t cb, void *ctxt);
-int		dsos_obj_create(dsos_obj_t *obj, dsos_schema_t *schema, size_t len);
+dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
+int		dsos_obj_create(dsos_obj_t *obj);
 dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
 
 #define dsos_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsos_error(fmt, ...)	sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsos_fatal(fmt, ...) \
 	do {									\
+		if (!__ods_log_fp)						\
+			__ods_log_fp = stderr;					\
+		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
 		exit(1);							\
 	} while (0);

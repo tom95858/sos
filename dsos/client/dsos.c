@@ -49,11 +49,9 @@ int dsos_init(const char *config_filename)
 	for (i = 0; i < g.num_servers; ++i) {
 		ret = dsos_connect(g.conns[i].host, g.conns[i].service, g.conns[i].server_id);
 		dsos_err_set(i, ret);
-#if 0
 		if (ret)
-			dsos_fatal("err %d (%s) connecting to server %d at %s:%s\n",
+			dsos_error("err %d (%s) connecting to server %d at %s:%s\n",
 				   ret, zap_err_str(ret), i, g.conns[i].host, g.conns[i].service);
-#endif
 	}
 	if (dsos_err_status())
 		return ECONNREFUSED;
@@ -84,10 +82,6 @@ int dsos_init(const char *config_filename)
 		zerr = zap_map(conn->ep, &conn->map, g.heap_buf, g.opts.heap_sz, ZAP_ACCESS_READ);
 		zerr = zerr || zap_share(conn->ep, conn->map, NULL, 0);
 		dsos_err_set(i, ret);
-#if 0
-		if (zerr)
-			dsos_error("zap_map/zap_share err %d %s\n", zerr, zap_err_str(zerr));
-#endif
 	}
 	if (dsos_err_status())
 		return EREMOTE;

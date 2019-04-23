@@ -40,6 +40,8 @@ static uint64_t bo_obj_id = 123123;  // XXX
 void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len)
 {
 	int			ret;
+	char			*obj_data;
+	size_t			obj_max_sz;
 	zap_err_t		zerr;
 	dsosd_req_t		*req;
 	sos_schema_t		schema;
@@ -58,29 +60,38 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 
 	obj = sos_obj_new(schema);
 	if (!obj) {
-		req->resp->u.hdr.status = 1;  // XXX
+		req->resp->u.hdr.status = ENOMEM;
 		req->resp->u.hdr.flags  = 0;
 		dsosd_debug("error creating obj\n");
 		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 		return;
 	}
+	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
+	dsosd_debug("obj_data %p obj_max_sz %d\n", obj_data, obj_max_sz);
 
 	if (msg->hdr.flags & DSOSD_MSG_IMM) {
-		ret = sos_obj_attr_by_name_from_str(obj, "attr1", msg->data, NULL);
-		if (ret)
-			dsosd_error("ep %p could not set attr1\n", ep);
+		/* The object data is in the recv buffer. Copy it to the object. */
+		memcpy(obj_data, msg->data, msg->len);
+		*(uint64_t *)obj_data = sos_schema_id(schema);
 		ret = sos_obj_index(obj);
 		if (ret)
-			dsosd_error("ep %p sos_obj_index ret %d\n", ret);
+			dsosd_error("ep %p sos_obj_index ret %d\n", ep, ret);
 		sos_obj_put(obj);
-
 		req->resp->u.hdr.status = ret;
 		req->resp->u.hdr.flags  = DSOSD_MSG_IMM;
 		dsosd_debug("new obj %p id %ld\n", obj, bo_obj_id-1);  // XXX
 		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 	} else {
+		/* RMA-read the object from client memory. */
 		req->ctxt = obj;
 		dsosd_debug("new obj %p id %ld rma\n", obj, bo_obj_id-1);  // XXX
+		/*
+		 * We RMA into client->testbuf for the moment. Once SOS is enhanced
+		 * to take a heap allocator, we can allocate the object in a
+		 * shared heap so the server can RMA-read it directly. Until
+		 * then, we RMA into a scratch buffer and then memcpy into the
+		 * object from that in the completion handler.
+		 */
 		zerr = zap_read(ep,
 				client->rmap, (char *)msg->va,    /* src */
 				client->lmap, client->testbuf,    /* dst */
@@ -169,9 +180,9 @@ void rpc_handle_schema_by_name(zap_ep_t ep, dsosd_msg_schema_by_name_req_t *msg,
 	schema = sos_schema_by_name(cont, msg->name);
 	if (schema) {
 		req->resp->u.schema_by_name_resp.handle = dsosd_ptr_to_handle(schema);
-		sz = sizeof(req->resp->u.schema_by_name_resp.template);
+		sz = sizeof(req->resp->u.schema_by_name_resp.templ);
 		p = rpc_serialize_schema(schema,
-					 req->resp->u.schema_by_name_resp.template,
+					 req->resp->u.schema_by_name_resp.templ,
 					 &sz);
 		if (!p)
 			req->resp->u.hdr.status = ENAMETOOLONG;
@@ -296,7 +307,7 @@ void rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_template
 	req = dsosd_req_new(client, DSOSD_MSG_SCHEMA_FROM_TEMPLATE_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_schema_from_template_resp_t));
 
-	template = rpc_deserialize_schema_template(msg->template, len - sizeof(dsosd_msg_hdr_t));
+	template = rpc_deserialize_schema_template(msg->templ, len - sizeof(dsosd_msg_hdr_t));
 	if (!template) {
 		req->resp->u.hdr.status = EINVAL;
 		goto out;
@@ -369,12 +380,6 @@ static char *deserialize_str(char **pbuf, size_t *psz)
 {
 	char		*ret = *pbuf;
 	size_t		len = strlen(ret) + 1;
-
-	// XXX strdup the string, and free later. we can't keep a pointer
-	// into buf b/c it's part of a req's buffer which won't live forever
-	// on 2nd thought: this is ok, since we'll be using the template
-	// and done with it before the handler returns (the template gets
-	// mapped to a local sos_schema_t handle)
 
 	if (len == 1)
 		ret = NULL;

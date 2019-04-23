@@ -9,14 +9,18 @@ int main(int ac, char *av[])
 	Dsos	*dsos;
 	Cont	*cont;
 	Schema	*schema;
-	Obj	*obj;
 
-	cout << "Bo was here.";
+	cout << "Bo was here." << endl;
 
 	dsos = new Dsos(av[1]);
 	cont = dsos->cont("/tmp/cont.sos", Cont_flags::EXISTS, 0775);
-	schema = cont->schema("test");
+	schema = cont->schema("small");
 
-	cout << "and here.";
+	Obj obj = Obj(schema);
+	obj["attr1"];
+
+	delete cont;
+
+	cout << "and here." << endl;
 	return 0;
 }
