@@ -15,6 +15,7 @@ struct opts_s {
 	char	*src_addr;        // local addr of listening endpoint
 	char	*src_port;        // port or service name of listening endpoint
 	int	daemon;		  // run in the background
+	int	server_num;       // this server's # within DSOS (0..N-1)
 };
 
 /* Server statistics. */
@@ -74,6 +75,7 @@ typedef struct dsosd_client_s {
 void		dsosd_client_get(dsosd_client_t *client);
 dsosd_client_t	*dsosd_client_new(zap_ep_t ep);
 void		dsosd_client_put(dsosd_client_t *client);
+void		dsosd_objid_next(dsosd_objid_t *id, sos_schema_t schema);
 zap_err_t	dsosd_req_complete(dsosd_req_t *req, size_t len);
 void		dsosd_req_get(dsosd_req_t *req);
 dsosd_req_t	*dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t msg_len);

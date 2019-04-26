@@ -116,3 +116,17 @@ int dsos_connect(const char *host, const char *service, int server_id)
 
 	return conn->conn_status;
 }
+
+void dsos_disconnect(void)
+{
+	int	i, ret;
+
+	dsos_debug("starting\n");
+	for (i = 0; i < g.num_servers; ++i) {
+		ret = zap_close(g.conns[i].ep);
+		if (ret)
+			dsos_error("disconnect err %d\n", ret);
+		zap_free(g.conns[i].ep);
+	}
+	dsos_debug("done\n");
+}

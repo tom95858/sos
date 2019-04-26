@@ -1,6 +1,8 @@
 #ifndef __DSOSD_MSG_LAYOUT_H
 #define __DSOSD_MSG_LAYOUT_H
 
+#pragma pack(push,1)
+
 /*
  * A "handle" represents a server-side pointer to something like a container
  * or schema. When we send an RPC to a server, it sends back a handle instead
@@ -8,6 +10,21 @@
  * would take a pointer.
  */
 typedef uint64_t	dsosd_handle_t;
+
+/*
+ * A DSOS object id is unique within a distributed container. The top byte
+ * is the server # where the object resides, and the bottom 15 bytes
+ * are an id unique within the SOS container holding that object on that server.
+ */
+typedef struct {
+	union {
+		struct {
+			uint64_t	lo;
+			uint64_t	hi;
+		};
+		uint8_t		bytes[16];
+	};
+} dsosd_objid_t;
 
 #define DSOSD_MSG_MAX_PATH	128   // len of fixed-size char arrays in msgs
 #define DSOSD_MSG_MAX_DATA	1900  // conservative len of in-line data array
@@ -40,8 +57,6 @@ enum {
 enum {
 	DSOSD_MSG_IMM  = 0x00000001,
 };
-
-#pragma pack(push,1)
 
 /*
  * A message can be referenced as one of the unions in dsosd_msg_t
@@ -175,7 +190,7 @@ typedef struct dsosd_msg_obj_create_req {
 typedef struct dsosd_msg_obj_create_resp {
 	dsosd_msg_hdr_t		hdr;
 	uint64_t		len;
-	uint64_t		obj_id;
+	dsosd_objid_t		obj_id;
 } dsosd_msg_obj_create_resp_t;
 
 typedef struct dsosd_msg {

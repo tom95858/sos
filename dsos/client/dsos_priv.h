@@ -221,7 +221,7 @@ typedef struct {
 	dsos_obj_t	*obj;
 } rpc_object_create_in_t;
 typedef struct {
-	uint64_t	obj_id;
+	dsosd_objid_t	obj_id;
 } rpc_object_create_out_t;
 int	dsos_rpc_object_create(rpc_object_create_in_t *args_inp);
 

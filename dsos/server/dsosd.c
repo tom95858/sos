@@ -28,9 +28,10 @@ static void usage(char *av[])
 	fprintf(stderr, "usage: %s [options]\n", av[0]);
 	fprintf(stderr, "options:\n");
 	fprintf(stderr, "  --daemon          Run in the background.\n");
-	fprintf(stderr, "  --port <port>     Port or service name to listen on.\n");
-	fprintf(stderr, "  --provider <name> Zap provider to use.\n");
-	fprintf(stderr, "  --srcaddr <addr>  Server listening interface.\n");
+	fprintf(stderr, "  --port <port>     Port or service name to listen on (required).\n");
+	fprintf(stderr, "  --provider <name> Zap provider to use (required).\n");
+	fprintf(stderr, "  --server <num>    This server's # within the DSOS (required).\n");
+	fprintf(stderr, "  --srcaddr <addr>  Server listening interface (required).\n");
 	fprintf(stderr, "  --help            Display this message.\n");
 }
 
@@ -47,15 +48,20 @@ int main(int ac, char *av[])
 		{ "help",	no_argument,       NULL, 'h' },
 		{ "port",	required_argument, NULL, 'p' },
 		{ "provider",	required_argument, NULL, 'P' },
+		{ "server",	required_argument, NULL, 'n' },
 		{ "srcaddr",	required_argument, NULL, 's' },
 		{ 0,		0,		   0,     0  }
 	};
 
 	memset(&g.opts, 0, sizeof(g.opts));
+	g.opts.server_num = -1;
 	while ((c = getopt_long_only(ac, av, "", lopts, NULL)) != -1) {
 		switch (c) {
 		    case 'd':
 			g.opts.daemon = 1;
+			break;
+		    case 'n':
+			g.opts.server_num = atoi(optarg);
 			break;
 		    case 'p':
 			g.opts.src_port = strdup(optarg);
@@ -71,6 +77,9 @@ int main(int ac, char *av[])
 			exit(0);
 		}
 	}
+
+	if ((g.opts.server_num == -1) || !g.opts.src_port || !g.opts.zap_prov_name || !g.opts.src_addr)
+		dsosd_fatal("required option missing\n");
 
 	if (g.opts.daemon) {
 		ret = daemon(1, 1);

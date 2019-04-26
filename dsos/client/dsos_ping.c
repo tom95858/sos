@@ -129,8 +129,11 @@ void obj_cb(dsos_obj_t *obj, void *ctxt)
 		return;
 	}
 
-	printf("[%5d] server %d status %d flags %08x obj_id %ld len %d\n", getpid(),
-	       obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags, resp->obj_id, resp->len);
+	printf("[%5d] server %d status %d flags %08x obj_id %08lx%08lx len %d\n", getpid(),
+	       obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
+	       resp->obj_id.hi,
+	       resp->obj_id.lo,
+	       resp->len);
 	fflush(stdout);
 
 	int max_inline = obj->req->msg_len_max - sizeof(dsosd_msg_obj_create_req_t);

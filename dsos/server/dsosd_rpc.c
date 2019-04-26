@@ -35,8 +35,6 @@ void rpc_handle_ping(zap_ep_t ep, dsosd_msg_ping_req_t *msg, size_t len)
 	dsosd_req_complete(req, sizeof(dsosd_msg_ping_resp_t)+16);
 }
 
-static uint64_t bo_obj_id = 123123;  // XXX
-
 void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len)
 {
 	int			ret;
@@ -55,8 +53,8 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 
 	req = dsosd_req_new(client, DSOSD_MSG_OBJ_CREATE_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_obj_create_resp_t));
-	req->resp->u.obj_create_resp.obj_id = bo_obj_id++;  // XXX
-	req->resp->u.obj_create_resp.len    = msg->len;
+	dsosd_objid_next(&req->resp->u.obj_create_resp.obj_id, schema);
+	req->resp->u.obj_create_resp.len = msg->len;
 
 	obj = sos_obj_new(schema);
 	if (!obj) {
@@ -67,7 +65,10 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 		return;
 	}
 	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
-	dsosd_debug("obj_data %p obj_max_sz %d\n", obj_data, obj_max_sz);
+	dsosd_debug("new obj %p obj_data %p obj_max_sz %d id %08lx%08lx\n",
+		    obj, obj_data, obj_max_sz,
+		    req->resp->u.obj_create_resp.obj_id.hi,
+		    req->resp->u.obj_create_resp.obj_id.lo);
 
 	if (msg->hdr.flags & DSOSD_MSG_IMM) {
 		/* The object data is in the recv buffer. Copy it to the object. */
@@ -79,12 +80,10 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 		sos_obj_put(obj);
 		req->resp->u.hdr.status = ret;
 		req->resp->u.hdr.flags  = DSOSD_MSG_IMM;
-		dsosd_debug("new obj %p id %ld\n", obj, bo_obj_id-1);  // XXX
 		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 	} else {
 		/* RMA-read the object from client memory. */
 		req->ctxt = obj;
-		dsosd_debug("new obj %p id %ld rma\n", obj, bo_obj_id-1);  // XXX
 		/*
 		 * We RMA into client->testbuf for the moment. Once SOS is enhanced
 		 * to take a heap allocator, we can allocate the object in a
@@ -494,4 +493,14 @@ static void dump_schema_template(sos_schema_template_t t)
 				dsosd_debug("join attr %s\n", t->attrs[i].join_list[j]);
 		}
 	}
+}
+
+// This will call into SOS soon to get a container-unique id.
+void dsosd_objid_next(dsosd_objid_t *id, sos_schema_t schema)
+{
+	static uint64_t next_obj_id = 123123;  // XXX temporary for testing
+
+	id->hi = 0;
+	id->lo = next_obj_id++;
+	id->bytes[15] = g.opts.server_num;
 }
