@@ -6,6 +6,7 @@
 #include <sys/queue.h>
 #include <errno.h>
 #include <zap.h>
+#include "mmalloc.h"
 #include "dsosd_msg_layout.h"
 #include "sos_priv.h"
 
@@ -55,6 +56,7 @@ typedef struct dsosd_req_s {
 	dsosd_msg_t		*resp;         // response message
 	size_t			resp_max_len;
 	void			*ctxt;
+	void			*rma_buf;      // XXX buf from registered heap (temporary)
 } dsosd_req_t;
 
 /*
@@ -66,9 +68,11 @@ typedef struct dsosd_client_s {
 	zap_ep_t		ep;            // zap active endpoint
 	zap_map_t		rmap;          // map for shared heap
 #if 1
-	// for testing only
+	// XXX temporary, until SOS can alloc from reg mem
+	mm_region_t		heap;          // heap shared w/servers
 	zap_map_t		lmap;          // local map
-	char			*testbuf;
+	char			*heap_buf;     // registered buffer for heap
+	size_t			heap_sz;       // size of heap
 #endif
 } dsosd_client_t;
 

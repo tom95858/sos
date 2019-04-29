@@ -91,9 +91,12 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 		 * then, we RMA into a scratch buffer and then memcpy into the
 		 * object from that in the completion handler.
 		 */
+		req->rma_buf = mm_alloc(client->heap, msg->len);
+		if (!req->rma_buf)
+			dsosd_fatal("could not alloc from shared heap\n");
 		zerr = zap_read(ep,
 				client->rmap, (char *)msg->va,    /* src */
-				client->lmap, client->testbuf,    /* dst */
+				client->lmap, req->rma_buf,       /* dst */
 				msg->len, req);
 		if (zerr) {
 			dsosd_error("zap_read ep %p zerr %d %s\n", ep, zerr, zap_err_str(zerr));
@@ -320,7 +323,6 @@ void rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_template
 		req->resp->u.hdr.status = EINVAL;
  out:
 	dsosd_debug("ep %d msg %p len %d: template %p\n", ep, msg, len, template);
-	dump_schema_template(template);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_schema_from_template_resp_t));
 
@@ -400,7 +402,10 @@ static void *rpc_serialize_schema(sos_schema_t schema, void *buf, size_t *psz)
 	TAILQ_FOREACH(attr, &schema->attr_list, entry) {
 		serialize_str   (attr->data->name, &p, psz);
 		serialize_uint32(attr->data->type, &p, psz);
-		serialize_uint32(attr->data->size, &p, psz);
+		if (attr->data->el_sz)
+			serialize_uint32(attr->data->count, &p, psz);
+		else
+			serialize_uint32(attr->data->size, &p, psz);
 		p_joinlist_len = (uint32_t *)serialize_uint32(0, &p, psz);
 		if (attr->ext_ptr) {
 			for (j = 0; j < attr->ext_ptr->count; ++j) {

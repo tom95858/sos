@@ -1652,6 +1652,7 @@ void sos_schema_print(sos_schema_t schema, FILE *fp)
 	TAILQ_FOREACH(attr, &schema->attr_list, entry) {
 		fprintf(fp, "    -attribute : %s\n", attr->data->name);
 		fprintf(fp, "        type          : %s\n", type_name(attr->data->type));
+		fprintf(fp, "        size          : %d\n", attr->data->size);
 		fprintf(fp, "        idx           : %d\n", attr->data->id);
 		fprintf(fp, "        indexed       : %d\n", attr->data->indexed);
 		fprintf(fp, "        offset        : %ld\n", attr->data->offset);

@@ -10,6 +10,9 @@ dsosd_CFLAGS  = $(AM_CFLAGS)         \
 	-I$(top_srcdir)/sos/src      \
 	-I$(top_srcdir)/sos/include  \
 	-I$(top_srcdir)/ods/include  \
+	-I$(top_srcdir)/util/mmalloc \
 	-I@LIBZAP_INCDIR@
-dsosd_LDADD = $(top_builddir)/sos/src/libsos.la @LIBZAP_LIBDIR@/libzap.la
+dsosd_LDADD = $(top_builddir)/sos/src/libsos.la    \
+	$(top_builddir)/util/mmalloc/libmmalloc.la \
+	@LIBZAP_LIBDIR@/libzap.la
 bin_PROGRAMS = dsosd

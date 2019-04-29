@@ -43,6 +43,7 @@ struct globals_s {
 	dsos_conn_t		*conns;            // array of server connection objects
 	zap_t			zap;               // transport
 	mm_region_t		heap;              // heap shared w/servers
+	size_t			heap_sz;           // size of heap
 	char			*heap_buf;         // registered buffer for heap
 };
 extern struct globals_s g;

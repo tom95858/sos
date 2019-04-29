@@ -44,6 +44,7 @@ void dsos_obj_free(dsos_obj_t *obj)
 
 	if (!(obj->flags & DSOS_OBJ_INLINE))
 		mm_free(g.heap, obj->buf);
+	sos_obj_put(obj->sos_obj);
 	free(obj);
 }
 

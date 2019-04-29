@@ -25,3 +25,11 @@ dsos_ping_LDADD = libdsos.la                       \
 	$(top_builddir)/util/mmalloc/libmmalloc.la \
 	@LIBZAP_LIBDIR@/libzap.la -lssl
 bin_PROGRAMS += dsos_ping
+
+tst_create_SOURCES = tst_create.c
+tst_create_LDADD = libdsos.la                      \
+	$(top_builddir)/sos/src/libsos.la          \
+	$(top_builddir)/util/json/libjson_util.la  \
+	$(top_builddir)/util/mmalloc/libmmalloc.la \
+	@LIBZAP_LIBDIR@/libzap.la -lssl
+bin_PROGRAMS += tst_create

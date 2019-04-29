@@ -160,12 +160,16 @@ static void handle_connect_req(zap_ep_t ep)
 	zap_set_ucontext(ep, client);
 
 #if 1
-	// XXX map a local buffer we can RMA in to
-	size_t sz = 1024 * 1024;
-	client->testbuf = malloc(sz);
-	zap_err_t zerr = zap_map(ep, &client->lmap, client->testbuf, sz, ZAP_ACCESS_NONE);
+	// XXX map a heap we can RMA in to. This is temporary, until
+	// SOS can take a heap allocator or can alloc from reg mem.
+	client->heap_sz  = 4 * 1024 * 1024;
+	client->heap_buf = malloc(client->heap_sz);
+	zap_err_t zerr = zap_map(ep, &client->lmap, client->heap_buf, client->heap_sz, ZAP_ACCESS_NONE);
 	if (zerr)
-		printf("zap_map err %d %s\n", zerr, zap_err_str(zerr));
+		dsosd_fatal("zap_map err %d %s\n", zerr, zap_err_str(zerr));
+	client->heap = mm_new(client->heap_buf, client->heap_sz, 64);
+	if (!client->heap)
+		dsosd_fatal("could not create shared heap\n");
 #endif
 }
 
@@ -206,8 +210,8 @@ static void handle_disconnected(zap_ep_t ep)
 	// XXX
 	if (client->lmap)
 		zap_unmap(ep, client->lmap);
-	if (client->testbuf)
-		free(client->testbuf);
+	if (client->heap_buf)
+		free(client->heap_buf);
 #endif
 	zap_free(ep);
 	dsosd_client_put(client);
@@ -251,7 +255,9 @@ static void handle_read_complete(zap_ep_t ep, void *ctxt)
 	 * directly into the object once SOS is capable of mapping it.
 	 */
 	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
-	memcpy(obj_data, client->testbuf, req->resp->u.obj_create_resp.len);
+	memcpy(obj_data, req->rma_buf, req->resp->u.obj_create_resp.len);
+	mm_free(client->heap, req->rma_buf);
+	req->rma_buf = NULL;
 	*(uint64_t *)obj_data = sos_schema_id(obj->schema);
 #endif
 	ret = sos_obj_index(obj);
