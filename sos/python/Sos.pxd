@@ -611,7 +611,7 @@ cdef extern from "sos/sos.h":
                                                      void *arg)
     sos_obj_t sos_obj_find(sos_attr_t attr, sos_key_t key)
     int sos_index_new(sos_t sos, const char *name,
-                      const char *idx_type, const char *key_type,
+                      const char *idx_type, sos_type_t key_type,
                       const char *args)
     sos_index_t sos_index_open(sos_t sos, const char *name)
     int sos_index_insert(sos_index_t index, sos_key_t key, sos_obj_t obj)
@@ -622,6 +622,7 @@ cdef extern from "sos/sos.h":
     sos_obj_t sos_index_find_sup(sos_index_t index, sos_key_t key)
     sos_obj_t sos_index_find_max(sos_index_t index, sos_key_t *pkey)
     sos_obj_t sos_index_find_min(sos_index_t index, sos_key_t *pkey)
+    sos_type_t sos_index_key_type(sos_index_t index)
     int sos_index_insert_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t ref)
     int sos_index_remove_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *pref)
     int sos_index_find_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *pref)
@@ -659,6 +660,7 @@ cdef extern from "sos/sos.h":
     size_t sos_key_len(sos_key_t key)
     unsigned char *sos_key_value(sos_key_t key)
     void *sos_value_as_key(sos_value_t value)
+    int sos_key_cmp(sos_key_t lhs, sos_key_t rhs, sos_type_t type)
     int sos_comp_key_set(sos_key_t key, size_t len, sos_comp_key_spec_t key_spec)
     sos_comp_key_spec_t sos_comp_key_get(sos_key_t key, size_t *len)
     size_t sos_comp_key_size(size_t len, sos_comp_key_spec_t key_spec)

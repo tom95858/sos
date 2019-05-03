@@ -353,6 +353,11 @@ static const char *key_types[] = {
 	[SOS_TYPE_OBJ_ARRAY] = "NONE",
 };
 
+const char *__sos_index_key_type(sos_type_t t)
+{
+	return key_types[t];
+}
+
 static sos_attr_t attr_new(sos_schema_t schema, sos_type_t type, int size)
 {
 	sos_attr_t attr = calloc(1, sizeof *attr);
@@ -1286,7 +1291,7 @@ int __sos_schema_open(sos_t sos, sos_schema_t schema)
 				goto err;
 			}
 			rc = sos_index_new(sos, idx_name,
-					   attr->idx_type, attr->key_type,
+					   attr->idx_type, attr->data->type,
 					   attr->idx_args);
 			if (rc)
 				goto err;

@@ -231,6 +231,7 @@ typedef void *(*sos_value_key_value_fn_t)(sos_value_t);
 struct sos_index_s {
 	char name[SOS_INDEX_NAME_LEN];
 	sos_t sos;
+	sos_type_t key_type;
 	ods_idx_t idx;
 };
 
@@ -292,6 +293,7 @@ struct sos_schema_s {
 typedef struct sos_idx_data_s {
 	ods_atomic_t ref_count;
 	uint32_t mode;
+	uint32_t key_type_id;
 	char name[SOS_INDEX_NAME_LEN];
 	char key_type[SOS_INDEX_KEY_TYPE_LEN];
 	char idx_type[SOS_INDEX_TYPE_LEN];
@@ -457,6 +459,7 @@ void __sos_part_obj_put(sos_t sos, ods_obj_t part_obj);
 ods_obj_t __sos_part_obj_get(sos_t sos, ods_obj_t part_obj);
 int __sos_schema_open(sos_t sos, sos_schema_t schema);
 int __sos_schema_name_cmp(void *a, void *b);
+const char *__sos_index_key_type(sos_type_t t);
 int __sos_open_partitions(sos_t sos, char *tmp_path);
 int __sos_make_all_dir(const char *inp_path, mode_t omode);
 sos_part_t __sos_container_part_find(sos_t sos, const char *name);

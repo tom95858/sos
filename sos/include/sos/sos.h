@@ -566,7 +566,7 @@ typedef sos_visit_action_t (*sos_visit_cb_fn_t)(sos_index_t index,
 						void *arg);
 sos_obj_t sos_obj_find(sos_attr_t attr, sos_key_t key);
 int sos_index_new(sos_t sos, const char *name,
-		  const char *idx_type, const char *key_type,
+		  const char *idx_type, sos_type_t key_type,
 		  const char *args);
 sos_index_t sos_index_open(sos_t sos, const char *name);
 typedef uint32_t sos_index_rt_opt_t;
@@ -590,6 +590,7 @@ int sos_index_find_min_ref(sos_index_t index, sos_key_t *key, sos_obj_ref_t *ref
 int sos_index_find_max_ref(sos_index_t index, sos_key_t *key, sos_obj_ref_t *ref);
 int sos_index_commit(sos_index_t index, sos_commit_t flags);
 int sos_index_close(sos_index_t index, sos_commit_t flags);
+sos_type_t sos_index_key_type(sos_index_t index);
 size_t sos_index_key_size(sos_index_t index);
 sos_key_t sos_index_key_new(sos_index_t index, size_t size);
 int sos_index_key_from_str(sos_index_t index, sos_key_t key, const char *str);
@@ -655,6 +656,7 @@ typedef struct sos_comp_key_spec {
 
 sos_key_t sos_key_new(size_t sz);
 sos_key_t sos_key_new_from_attr(sos_key_t key, sos_attr_t attr, ...);
+int sos_key_cmp(sos_key_t lhs, sos_key_t rhs, sos_type_t type);
 void sos_key_put(sos_key_t key);
 int sos_key_copy(sos_key_t dst, sos_key_t src);
 size_t sos_key_set(sos_key_t key, void *value, size_t sz);

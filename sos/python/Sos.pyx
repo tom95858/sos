@@ -827,8 +827,33 @@ cdef class Key(object):
     def __len__(self):
         return self.c_size
 
+    def __richcmp__(self, b, op):
+        cdef Key rhs = b
+        cdef int rc
+
+        if self.sos_type != rhs.sos_type:
+            raise ValueError("The comparison key is a different type {0} != {1}".
+                             format(self.sos_type, rhs.sos_type))
+        rc = sos_key_cmp(self.c_key, rhs.c_key, self.sos_type)
+
+        if op == 0:   # <
+            return rc < 0
+        elif op == 2: # ==
+            return rc == 0
+        elif op == 4: # >
+            return rc > 0
+        elif op == 1: # <=
+            return rc <= 0
+        elif op == 3: # !=
+            return rc != 0
+        elif op == 5: # >=
+            return rc >= 0
+
+        raise ValueError("The comparison op {0} is invalid".format(op))
+
     def __str__(self):
         cdef sos_value_data_t v = <sos_value_data_t>sos_key_value(self.c_key)
+        cdef sos_array_element_u *e = <sos_array_element_u *>sos_key_value(self.c_key)
         if self.sos_type == SOS_TYPE_UINT64:
             return self.str_fmt.format(v.prim.uint64_)
         elif self.sos_type == SOS_TYPE_INT64:
@@ -855,9 +880,9 @@ cdef class Key(object):
         elif self.sos_type == SOS_TYPE_STRUCT:
             return self.str_fmt.format(bytearray(v.prim.struc_[:self.c_size]))
         elif self.sos_type == SOS_TYPE_BYTE_ARRAY:
-            return bytearray(v.array.char_[:v.array.count])
+            return bytearray(e.char_[:sos_key_len(self.c_key)])
         elif self.sos_type == SOS_TYPE_CHAR_ARRAY:
-            return str(v.array.char_[:v.array.count])
+            return str(e.char_[:sos_key_len(self.c_key)])
         elif self.sos_type == SOS_TYPE_UINT64_ARRAY:
             s = ""
             for j in range(v.array.count):
@@ -1020,12 +1045,14 @@ cdef class Key(object):
         free(specs)
         return res
 
-    cdef assign(self, sos_key_t c_key):
+    cdef assign(self, sos_key_t c_key, sos_type_t t):
         if c_key == NULL:
             raise ValueError("key argument cannot be NULL")
         if self.c_key:
             sos_key_put(self.c_key)
         self.c_key = c_key
+        self.sos_type = t
+        self.c_size = sos_key_len(c_key)
         return self
 
     def __del__(self):
@@ -1035,6 +1062,12 @@ cdef class Key(object):
         if self.c_key:
             sos_key_put(self.c_key)
             self.c_key = NULL
+
+    def set_type(self, sos_type_t t):
+        self.sos_type = t
+
+    def get_type(self):
+        return self.sos_type
 
     def get_attr(self):
         return self.attr
@@ -1273,7 +1306,7 @@ cdef class AttrIter(SosObject):
         c_key = sos_iter_key(self.c_iter)
         if c_key:
             k = Key(size=sos_key_len(c_key), attr=self.attr)
-            k.assign(c_key)
+            k.assign(c_key, sos_attr_type(self.attr.c_attr))
             return k
         return None
 
@@ -3375,13 +3408,13 @@ cdef class Index(object):
         self.c_index = idx
         return self
 
-    def create(self, Container cont, name, key_type, idx_type="BXTREE", idx_opts=None):
+    def create(self, Container cont, name, sos_type_t key_type, idx_type="BXTREE", idx_opts=None):
         """Create a Sos Index
 
         Positional Arguments:
         -- The Container
         -- The index name string
-        -- The key type string representing a Sos type, e.g. uint16, uint32, uint64, etc...
+        -- The Sos type for the key
 
         Keyword Arguments:
         idx_type -- An index type string, the default is "BXTREE"
@@ -3391,7 +3424,7 @@ cdef class Index(object):
         cdef char *args
         cdef sos_index_t index
         args = NULL
-        rc = sos_index_new(cont.c_cont, name, idx_type, key_type.upper(), args)
+        rc = sos_index_new(cont.c_cont, name, idx_type, key_type, args)
         if rc != 0:
             raise ValueError("sos_index_new returned error {0} creating index {1}".format(rc, name))
 
@@ -3509,7 +3542,7 @@ cdef class Index(object):
         c_obj = sos_index_find_min(self.c_index, &c_key)
         if c_obj != NULL:
             key = Key()
-            key.assign(c_key)
+            key.assign(c_key, sos_index_key_type(self.c_index))
             obj = Object()
             obj.assign(c_obj)
             return ( key, obj )
@@ -3527,7 +3560,7 @@ cdef class Index(object):
         c_obj = sos_index_find_max(self.c_index, &c_key)
         if c_obj != NULL:
             key = Key()
-            key.assign(c_key)
+            key.assign(c_key, sos_index_key_type(self.c_index))
             obj = Object()
             obj.assign(c_obj)
             return ( key, obj )
@@ -3547,7 +3580,7 @@ cdef class Index(object):
         if rc:
             return ( None, None )
         key = Key()
-        key.assign(c_key)
+        key.assign(c_key, sos_index_key_type(self.c_index))
         return ( key, ( c_ref.ref.ods, c_ref.ref.obj ) )
 
     def find_max_ref(self):
@@ -3564,12 +3597,16 @@ cdef class Index(object):
         if rc:
             return ( None, None )
         key = Key()
-        key.assign(c_key)
+        key.assign(c_key, sos_index_key_type(self.c_index))
         return ( key, ( c_ref.ref.ods, c_ref.ref.obj ) )
 
     def name(self):
         """Return the name of the index"""
         return sos_index_name(self.c_index)
+
+    def key_type(self):
+        """Return the Sos type-id for the key"""
+        return sos_index_key_type(self.c_index)
 
     def stats(self):
         """Return a dictionary of index statistics as follows:
