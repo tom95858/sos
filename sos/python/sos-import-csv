@@ -6,6 +6,13 @@ import argparse
 from sosdb import Sos
 import struct
 import json
+import gzip
+
+def fileopener(fn):
+    """return the correct open function for the filename (default or gzip.open)"""
+    if fn.endswith(".gz") or fn.endswith(".GZ"):
+        return gzip.open
+    return open
 
 def pack_it(cols, fmt, idx_ary):
     vals = []
@@ -85,7 +92,7 @@ if __name__ == "__main__":
     parser.add_argument("--map",
                         help="Specifies how CSV columns are mapped to attributes")
     parser.add_argument("--csv",
-                        help="The path to the CSV file to import")
+                        help="The path to the CSV file to import. May be gzipped.")
     parser.add_argument("--status", action="store_true",
                         help="Show detail import status")
     args = parser.parse_args()
@@ -136,7 +143,7 @@ if __name__ == "__main__":
         else:
             raise ValueError("Error processing {0}".format(spec))
 
-    df = open(args.csv, 'r')
+    df = fileopener(args.csv)(args.csv, 'r')
     count = 0
     t0 = time.time()
     new_recs = 0
