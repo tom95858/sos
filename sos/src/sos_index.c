@@ -340,7 +340,7 @@ int sos_index_visit(sos_index_t index, sos_key_t key, sos_visit_cb_fn_t cb_fn, v
  *
  * \param index The index handle
  * \param key The key
- * \param obj The object to which the key will refer
+ * \param obj The object to associate with the key
  * \retval 0 Success
  * \retval EINVAL The object or index is invalid
  * \retval !0 A Unix error code
@@ -353,15 +353,32 @@ int sos_index_insert(sos_index_t index, sos_key_t key, sos_obj_t obj)
 }
 
 /**
- * \brief Remove a key from an index
- *
- * Remove a key/value from the index. Note that the function takes an
- * object as a paramter. This is necessary to discriminate when
- * multiple objects are referred to by the same key.
+ * \brief Add key-value data to an index
  *
  * \param index The index handle
  * \param key The key
- * \param obj The specific object to which the key will refer
+ * \param ref The reference data to associate with the key
+ * \retval 0 Success
+ * \retval EINVAL The object or index is invalid
+ * \retval !0 A Unix error code
+ */
+int sos_index_insert_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t ref)
+{
+	return ods_idx_insert(index->idx, key, ref.idx_data);
+}
+
+/**
+ * \brief Remove a key from an index
+ *
+ * Remove a key/value from the index. Note that the function takes an
+ * object as a parameter. This is necessary to discriminate when
+ * there are duplicate keys in th index.
+ *
+ * The \c obj parameter is ignored if there are no duplicates.
+ *
+ * \param index The index handle
+ * \param key The key
+ * \param obj The object to delete if there are duplicates
  * \retval 0 Success
  * \retval !0 A Unix error code
  */
@@ -370,6 +387,25 @@ int sos_index_remove(sos_index_t index, sos_key_t key, sos_obj_t obj)
 	ods_idx_data_t data;
 	data = obj->obj_ref.idx_data;
 	return ods_idx_delete(index->idx, key, &data);
+}
+
+/**
+ * \brief Remove reference data from an index
+ *
+ * Remove a key from the index. Note that the function takes a pointer
+ * to reference data as a parameter. This is necessary to discriminate
+ * when duplicate keys are present in the index. This parameter may be
+ * NULL.
+ *
+ * \param index The index handle
+ * \param key The key
+ * \param ref The reference data to which the key referred
+ * \retval 0 Success
+ * \retval !0 A Unix error code
+ */
+int sos_index_remove_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *ref)
+{
+	return ods_idx_delete(index->idx, key, &ref->idx_data);
 }
 
 /**
@@ -396,13 +432,13 @@ sos_obj_t sos_index_find(sos_index_t index, sos_key_t key)
 }
 
 /**
- * \brief Find a key in the index and return the ref
+ * \brief Return the reference data for a Key
  *
  * \param index The index handle
  * \param key The key
- * \param ref Pointer to sos_obj_ref_t
- * \retval 0 The key was found and ref contains the data
- * \retval ENOENT The key was not found
+ * \param ref Pointer to the reference data buffer
+ * \retval 0 Key found
+ * \retval ENOENT Key not found
  */
 int sos_index_find_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *ref)
 {
@@ -410,7 +446,10 @@ int sos_index_find_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *ref)
 }
 
 /**
- * \brief Find a key in the index for the attribute and return the associated object
+ * \brief Find a key in the index
+ *
+ * Find the key in the index and return the associated object. The
+ * function returns NULL if the key is not found.
  *
  * \param index The index handle
  * \param key The key
@@ -427,21 +466,23 @@ sos_obj_t sos_obj_find(sos_attr_t attr, sos_key_t key)
 /**
  * \brief Find the minima in the index and return the associated object
  *
+ * Returns the objectg associated with the minimum key in the
+ * index. If the \c pkey parameter is not NULL, it is set to the
+ * minimum key value.
+ *
  * \param index The index handle
- * \returns The sos_obj_t handle for the object
+ * \param pkey Pointer to a sos_key_t
+ * \returns The sos_obj_t handle for the object or NULL if the index is empty
  */
-sos_obj_t sos_index_find_min(sos_index_t index)
+sos_obj_t sos_index_find_min(sos_index_t index, sos_key_t *pkey)
 {
 	sos_obj_t obj;
 	sos_obj_ref_t idx_ref;
-	ods_key_t key = NULL;
-	int rc = ods_idx_min(index->idx, &key, &idx_ref.idx_data);
+	int rc = ods_idx_min(index->idx, pkey, &idx_ref.idx_data);
 	if (rc) {
 		errno = rc;
 		return NULL;
 	}
-	if (key)
-		ods_obj_put(key);
 	obj = sos_ref_as_obj(index->sos, idx_ref);
 	if (!obj)
 		errno = ENOMEM;
@@ -449,27 +490,61 @@ sos_obj_t sos_index_find_min(sos_index_t index)
 }
 
 /**
- * \brief Find the maxima in the index and return the associated object
+ * \brief Find the minima in the index
+ *
+ * Find the minima in the index and return the key and reference data
  *
  * \param index The index handle
+ * \param pkey Pointer to the key
+ * \param pref Pointer to the reference data
+ * \retval 0 Success
+ * \retval ENOENT The index is empty
+ */
+int sos_index_find_min_ref(sos_index_t index, sos_key_t *pkey, sos_obj_ref_t *pref)
+{
+	return ods_idx_min(index->idx, pkey, &pref->idx_data);
+}
+
+/**
+ * \brief Find the maxima in the index and return the associated object
+ *
+ * Returns the objectg associated with the maximum key in the
+ * index. If the \c pkey parameter is not NULL, it is set to the
+ * maximum key value.
+ *
+ * \param index The index handle
+ * \param pkey Pointer to the key to receive the max
  * \returns The sos_obj_t handle for the object
  */
-sos_obj_t sos_index_find_max(sos_index_t index)
+sos_obj_t sos_index_find_max(sos_index_t index, sos_key_t *pkey)
 {
 	sos_obj_t obj;
 	sos_obj_ref_t idx_ref;
-	ods_key_t key = NULL;
-	int rc = ods_idx_max(index->idx, &key, &idx_ref.idx_data);
+	int rc = ods_idx_max(index->idx, pkey, &idx_ref.idx_data);
 	if (rc) {
 		errno = rc;
 		return NULL;
 	}
-	if (key)
-		ods_obj_put(key);
 	obj = sos_ref_as_obj(index->sos, idx_ref);
 	if (!obj)
 		errno = ENOMEM;
 	return obj;
+}
+
+/**
+ * \brief Find the minima in the index
+ *
+ * Find the maxima in the index and return the key and reference data
+ *
+ * \param index The index handle
+ * \param pkey Pointer to a sos_key_t
+ * \param pref Pointer to the reference data
+ * \retval 0 Success
+ * \retval ENOENT The index is empty
+ */
+int sos_index_find_max_ref(sos_index_t index, sos_key_t *pkey, sos_obj_ref_t *pref)
+{
+	return ods_idx_max(index->idx, pkey, &pref->idx_data);
 }
 
 /**
@@ -496,7 +571,23 @@ sos_obj_t sos_index_find_sup(sos_index_t index, sos_key_t key)
 }
 
 /**
- * \brief Find the infinum (greatest lower bound) of the specified key
+ * \brief Find the supremum (least upper bound) of the specified key
+ *
+ * Find the supremum of the key and return the reference data.
+
+ * \param index The index handle
+ * \param key The key
+ * \param ref Pointer to the reference data
+ * \retval 0 Success
+ * \retval ENOENT The key has no supremum
+ */
+int sos_index_find_sup_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *ref)
+{
+	return ods_idx_find_lub(index->idx, key, &ref->idx_data);
+}
+
+/**
+ * \brief Find the infimum (greatest lower bound) of the specified key
  *
  * \param index The index handle
  * \param key The key
@@ -516,6 +607,22 @@ sos_obj_t sos_index_find_inf(sos_index_t index, sos_key_t key)
 	if (!obj)
 		errno = EINVAL;
 	return obj;
+}
+
+/**
+ * \brief Find the infimum (least upper bound) of the specified key
+ *
+ * Find the infimum of the key and return the reference data.
+
+ * \param index The index handle
+ * \param key The key
+ * \param ref Pointer to the reference data
+ * \retval 0 Success
+ * \retval ENOENT The key has no infimum
+ */
+int sos_index_find_inf_ref(sos_index_t index, sos_key_t key, sos_obj_ref_t *ref)
+{
+	return ods_idx_find_glb(index->idx, key, &ref->idx_data);
 }
 
 /**

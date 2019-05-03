@@ -371,23 +371,21 @@ size_t sos_attr_key_size(sos_attr_t attr)
 	sos_schema_t schema;
 	size_t size;
 	int i;
-	sos_index_t index;
 
 	switch (sos_attr_type(attr)) {
 	case SOS_TYPE_JOIN:
 		schema = sos_attr_schema(attr);
 		join_ids = sos_attr_join_list(attr);
-		for (size = i = 0; i < join_ids->count; i++) {
+		size = sizeof(uint16_t); /* comp_key.len */
+		for (i = 0; i < join_ids->count; i++) {
 			sos_attr_t ja =
 				sos_schema_attr_by_id(schema, join_ids->data.uint32_[i]);
-			size += sos_attr_key_size(ja);
+			size += (sos_attr_size(ja) * sos_attr_count(ja))
+				+ /* key_comp.type */sizeof(uint16_t);
 		}
 		return size;
 	default:
-		index = sos_attr_index(attr);
-		if (index)
-			return sos_index_key_size(index);
-		return sos_attr_size(attr);
+		return sos_attr_size(attr) * sos_attr_count(attr);
 	}
 }
 

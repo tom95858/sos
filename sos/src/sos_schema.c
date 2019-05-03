@@ -440,7 +440,7 @@ int sos_schema_attr_add(sos_schema_t schema, const char *name, sos_type_t type, 
 	va_list ap;
 	size_t size, array_data_sz, el_sz;
 	int i, join_count;
-	int count = 0;
+	int count = 1;
 	char **join_attrs;
 	sos_array_t ext_ptr = NULL;
 
@@ -953,6 +953,7 @@ size_t sos_attr_size(sos_attr_t attr)
  */
 size_t sos_attr_count(sos_attr_t attr)
 {
+	assert(attr->data->count);
 	return attr->data->count;
 }
 
@@ -1530,7 +1531,7 @@ int sos_schema_add(sos_t sos, sos_schema_t schema)
 	ods_obj_put(schema_key);
 	ods_obj_put(udata);
 	ods_unlock(sos->schema_ods, 0);
-	return 0; // __sos_schema_open(sos, schema);
+	return 0;
  err_3:
 	ods_obj_delete(schema_key);
 	ods_obj_put(schema_key);
