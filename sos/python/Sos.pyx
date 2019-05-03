@@ -1,3 +1,48 @@
+# Copyright (c) 2014 Open Grid Computing, Inc. All rights reserved.
+# Copyright (c) 2019 NTESS Corporation. All rights reserved.
+# Under the terms of Contract DE-AC04-94AL85000, there is a non-exclusive
+# license for use of this work by or on behalf of the U.S. Government.
+# Export of this program may require a license from the United States
+# Government.
+#
+# This software is available to you under a choice of one of two
+# licenses.  You may choose to be licensed under the terms of the GNU
+# General Public License (GPL) Version 2, available from the file
+# COPYING in the main directory of this source tree, or the BSD-type
+# license below:
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#      Redistributions of source code must retain the above copyright
+#      notice, this list of conditions and the following disclaimer.
+#
+#      Redistributions in binary form must reproduce the above
+#      copyright notice, this list of conditions and the following
+#      disclaimer in the documentation and/or other materials provided
+#      with the distribution.
+#
+#      Neither the name of NTESS Corporation, Open Grid Computing nor
+#      the names of any contributors may be used to endorse or promote
+#      products derived from this software without specific prior
+#      written permission.
+#
+#      Modified source versions must be plainly marked as such, and
+#      must not be misrepresented as being the original software.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 from __future__ import print_function
 from cpython cimport PyObject, Py_INCREF
 from libc.stdint cimport *
@@ -732,26 +777,51 @@ cdef class Key(object):
     cdef Attr attr
     cdef object str_fmt
 
-    def __init__(self, size=None, sos_type=None, attr=None):
+    def __init__(self, size=None, attr=None, sos_type=None, count=None):
+        """Construct a Key object
+
+        A Key object is constructed in one of three ways:
+
+        - An untyped key of 'size'
+        - A typed key of type 'sos_type' and optional array count 'count'
+        - A typed key as defined by the attrribute 'attr'
+
+        If the the 'sos_type' keyword is used and the type is an
+        array, then the 'count' argument must be given to indicate how
+        many elements are in the array.
+
+        """
+        cdef int key_size = 0
+
         self.attr = attr
-        if attr:
-            if not size:
-                size = attr.size()
+        if attr is not None:
+            if size or sos_type or count:
+                raise ValueError("The 'attr' keyword must be used alone")
+            key_size = attr.key_size()
             self.sos_type = attr.type()
-        if sos_type:
-            if attr:
-                raise ValueError("sos_type and attr are mutually exclusive")
+        elif sos_type is not None:
+            if attr or size:
+                raise ValueError("'sos_type' keyword can only be used with 'count'")
+            if sos_type == SOS_TYPE_JOIN:
+                raise ValueError("Join Keys must be associated with a Schema attribute.")
             if sos_type < 0 or sos_type > SOS_TYPE_LAST:
-                raise ValueError("{0} is an invalid Sos type")
+                raise ValueError("{0} is an invalid Sos type".format(sos_type))
             self.sos_type = sos_type
-            if not size and sos_type >= SOS_TYPE_BYTE_ARRAY:
-                raise ValueError("size must be specified if the key type is an array")
-        # if not sos_type and not attr:
-        #    raise ValueError("Either attr or sos_type must be specified.")
-        if not size:
-            size = type_sizes[<int>self.sos_type](None)
-        self.c_key = sos_key_new(size)
-        self.c_size = size
+            if sos_type >= TYPE_IS_ARRAY:
+                if not count:
+                    raise ValueError("The 'count' keyword must be "
+                                     "given if the type is an array")
+                else:
+                    key_size = type_sizes[<int>self.sos_type](<int>count)
+            else:
+                key_size = type_sizes[<int>self.sos_type](0)
+        elif size is not None:
+            key_size = size
+        if key_size:
+            self.c_key = sos_key_new(key_size)
+        else:
+            self.c_key = NULL
+        self.c_size = key_size
         self.str_fmt = "{0}"
 
     def __len__(self):
@@ -1488,6 +1558,10 @@ cdef class Attr(SosObject):
         """Returns the size of the attribute data in bytes"""
         return sos_attr_size(self.c_attr)
 
+    def key_size(self):
+        """Returns the key size of the attribute data in bytes"""
+        return sos_attr_key_size(self.c_attr)
+
     def count(self):
         """Returns the element count of an array"""
         return sos_attr_count(self.c_attr)
@@ -1560,18 +1634,15 @@ cdef class Attr(SosObject):
                 specs[i].data = sos_value_data_new(<sos_type_t>typ, j)
                 type_setters[typ](attr, specs[i].data, arg)
             size = sos_comp_key_size(specs_len, specs)
-            key = Key(size=size, sos_type=SOS_TYPE_JOIN)
+            key = Key(attr=self)
             i = sos_comp_key_set(key.c_key, specs_len, specs)
             for j in range(0, specs_len):
                 sos_value_data_del(specs[j].data)
             free(specs)
             if i != 0:
                 raise ValueError("Error {0} encoding the key.".format(i))
-        elif typ < SOS_TYPE_ARRAY:
-            key = Key(attr=self)
-            key.set_value(args[0])
         else:
-            key = Key(size=type_sizes[typ](args[0]), sos_type=typ)
+            key = Key(attr=self)
             key.set_value(args[0])
         return key
 
@@ -1589,14 +1660,18 @@ cdef class Attr(SosObject):
         cdef sos_obj_t c_obj
         cdef sos_obj_t c_arr_obj
         cdef sos_value_data_t c_data
+        cdef sos_key_t key;
         cdef int t
 
         if not self.is_indexed():
             return None
 
-        c_obj = sos_index_find_max(sos_attr_index(self.c_attr))
+        key = NULL
+        c_obj = sos_index_find_max(sos_attr_index(self.c_attr), &key)
         if c_obj == NULL:
             return None
+        if key:
+            sos_key_put(key)
         c_data = sos_obj_attr_data(c_obj, self.c_attr, &c_arr_obj)
 
         t = sos_attr_type(self.c_attr)
@@ -1612,14 +1687,18 @@ cdef class Attr(SosObject):
         cdef sos_obj_t c_obj
         cdef sos_obj_t c_arr_obj
         cdef sos_value_data_t c_data
+        cdef sos_key_t key
         cdef int t
 
         if not self.is_indexed():
             return None
 
-        c_obj = sos_index_find_min(sos_attr_index(self.c_attr))
+        key = NULL
+        c_obj = sos_index_find_min(sos_attr_index(self.c_attr), &key)
         if c_obj == NULL:
             return None
+        if key:
+            sos_key_put(key)
         c_data = sos_obj_attr_data(c_obj, self.c_attr, &c_arr_obj)
 
         t = sos_attr_type(self.c_attr)
@@ -3296,6 +3375,33 @@ cdef class Index(object):
         self.c_index = idx
         return self
 
+    def create(self, Container cont, name, key_type, idx_type="BXTREE", idx_opts=None):
+        """Create a Sos Index
+
+        Positional Arguments:
+        -- The Container
+        -- The index name string
+        -- The key type string representing a Sos type, e.g. uint16, uint32, uint64, etc...
+
+        Keyword Arguments:
+        idx_type -- An index type string, the default is "BXTREE"
+        idx_opts -- A list of index configuration strings
+        """
+        cdef int rc
+        cdef char *args
+        cdef sos_index_t index
+        args = NULL
+        rc = sos_index_new(cont.c_cont, name, idx_type, key_type.upper(), args)
+        if rc != 0:
+            raise ValueError("sos_index_new returned error {0} creating index {1}".format(rc, name))
+
+    def open(self, Container cont, name):
+        index = sos_index_open(cont.c_cont, name)
+        if index == NULL:
+            raise ValueError("sos_index_open returned {0} opening index {1}".\
+                             format(errno, name))
+        self.assign(index)
+
     def insert(self, Key key, Object obj):
         cdef int rc
         rc = sos_index_insert(self.c_index, key.c_key, obj.c_obj)
@@ -3306,8 +3412,22 @@ cdef class Index(object):
         rc = sos_index_remove(self.c_index, key.c_key, obj.c_obj)
         return rc
 
+    def insert_ref(self, Key key, ref):
+        cdef int rc
+        cdef sos_obj_ref_t sref
+
+        sref.ref.ods = ref[0]
+        sref.ref.obj = ref[1]
+        rc = sos_index_insert_ref(self.c_index, key.c_key, sref)
+        return rc
+
+    def remove_ref(self, Key key, sos_obj_ref_t ref):
+        cdef int rc
+        rc = sos_index_remove_ref(self.c_index, key.c_key, &ref)
+        return rc
+
     def find(self, Key key):
-        """Positions the index at the first matching key
+        """Find the object matching key
 
         Return the object that matches the specified key.
         If no match was found, None is returned.
@@ -3322,6 +3442,23 @@ cdef class Index(object):
             o = Object()
             return o.assign(c_obj)
         return None
+
+    def find_ref(self, Key key):
+        """Return the reference data for a key
+
+        Return the reference data associated with the specified key
+        If no match was found, None is returned.
+
+        Positional Arguments:
+        -- The Key to match
+        Returns:
+        -- The reference data at the index position
+        """
+        cdef sos_obj_ref_t ref
+        cdef int rc = sos_index_find_ref(self.c_index, key.c_key, &ref)
+        if rc:
+            return None
+        return ( ref.ref.ods, ref.ref.obj )
 
     def find_inf(self, Key key):
         """Positions the index at the infinum of the specified key
@@ -3359,6 +3496,76 @@ cdef class Index(object):
             o = Object()
             return o.assign(c_obj)
         return None
+
+    def find_min(self):
+        """Return the minimum in the index
+
+        Find the minimum and return the key and object as a tuple
+        (Key, Object)
+
+        """
+        cdef sos_obj_t c_obj
+        cdef sos_key_t c_key
+        c_obj = sos_index_find_min(self.c_index, &c_key)
+        if c_obj != NULL:
+            key = Key()
+            key.assign(c_key)
+            obj = Object()
+            obj.assign(c_obj)
+            return ( key, obj )
+        return ( None, None )
+
+    def find_max(self):
+        """Return the maximum in the index
+
+        Find the maximum and return the key and object as a tuple
+        (Key, Object)
+
+        """
+        cdef sos_obj_t c_obj
+        cdef sos_key_t c_key
+        c_obj = sos_index_find_max(self.c_index, &c_key)
+        if c_obj != NULL:
+            key = Key()
+            key.assign(c_key)
+            obj = Object()
+            obj.assign(c_obj)
+            return ( key, obj )
+        return ( None, None )
+
+    def find_min_ref(self):
+        """Return the minimum in the index
+
+        Find the minimum and return the key and reference data as a
+        tuple (Key, ( ref_0, ref_1 ))
+
+        """
+        cdef sos_obj_t c_obj
+        cdef sos_key_t c_key
+        cdef sos_obj_ref_t c_ref
+        cdef int rc = sos_index_find_min_ref(self.c_index, &c_key, &c_ref)
+        if rc:
+            return ( None, None )
+        key = Key()
+        key.assign(c_key)
+        return ( key, ( c_ref.ref.ods, c_ref.ref.obj ) )
+
+    def find_max_ref(self):
+        """Return the maximum in the index
+
+        Find the maximum and return the key and reference data as a
+        tuple (Key, ( ref_0, ref_1 ))
+
+        """
+        cdef sos_obj_t c_obj
+        cdef sos_key_t c_key
+        cdef sos_obj_ref_t c_ref
+        cdef int rc = sos_index_find_max_ref(self.c_index, &c_key, &c_ref)
+        if rc:
+            return ( None, None )
+        key = Key()
+        key.assign(c_key)
+        return ( key, ( c_ref.ref.ods, c_ref.ref.obj ) )
 
     def name(self):
         """Return the name of the index"""
@@ -3953,79 +4160,79 @@ key_setters[<int>SOS_TYPE_DOUBLE_ARRAY] = set_key_DOUBLE_ARRAY
 key_setters[<int>SOS_TYPE_LONG_DOUBLE_ARRAY] = set_key_LONG_DOUBLE_ARRAY
 key_setters[<int>SOS_TYPE_OBJ_ARRAY] = set_key_ERROR
 
-cdef int size_INT16(arg):
+cdef int size_INT16(int arg):
     return sizeof(int16_t)
 
-cdef int size_UINT16(arg):
+cdef int size_UINT16(int arg):
     return sizeof(uint16_t)
 
-cdef int size_INT32(arg):
+cdef int size_INT32(int arg):
     return sizeof(int32_t)
 
-cdef int size_UINT32(arg):
+cdef int size_UINT32(int arg):
     return sizeof(uint32_t)
 
-cdef int size_INT64(arg):
+cdef int size_INT64(int arg):
     return sizeof(int64_t)
 
-cdef int size_UINT64(arg):
+cdef int size_UINT64(int arg):
     return sizeof(uint64_t)
 
-cdef int size_FLOAT(arg):
+cdef int size_FLOAT(int arg):
     return sizeof(float)
 
-cdef int size_DOUBLE(arg):
+cdef int size_DOUBLE(int arg):
     return sizeof(double)
 
-cdef int size_LONG_DOUBLE(arg):
+cdef int size_LONG_DOUBLE(int arg):
     return sizeof(long double)
 
-cdef int size_TIMESTAMP(arg):
+cdef int size_TIMESTAMP(int arg):
     return sizeof(ods_timeval_s)
 
-cdef int size_ERROR(arg):
+cdef int size_ERROR(int arg):
     raise ValueError("The type has no key size.")
 
-cdef int size_STRUCT(arg):
+cdef int size_STRUCT(int arg):
     return len(arg)
 
-cdef int size_JOIN(arg):
+cdef int size_JOIN(int arg):
     return len(arg)
 
-cdef int size_BYTE_ARRAY(arg):
-    return len(arg)
+cdef int size_BYTE_ARRAY(int count):
+    return count
 
-cdef int size_CHAR_ARRAY(arg):
-    return len(arg)
+cdef int size_CHAR_ARRAY(int count):
+    return count
 
-cdef int size_INT16_ARRAY(arg):
-    return sizeof(int16_t) * len(arg)
+cdef int size_INT16_ARRAY(int count):
+    return sizeof(int16_t) * count
 
-cdef int size_UINT16_ARRAY(arg):
-    return sizeof(uint16_t) * len(arg)
+cdef int size_UINT16_ARRAY(int count):
+    return sizeof(uint16_t) * count
 
-cdef int size_INT32_ARRAY(arg):
-    return sizeof(int32_t) * len(arg)
+cdef int size_INT32_ARRAY(int count):
+    return sizeof(int32_t) * count
 
-cdef int size_UINT32_ARRAY(arg):
-    return sizeof(uint32_t) * len(arg)
+cdef int size_UINT32_ARRAY(int count):
+    return sizeof(uint32_t) * count
 
-cdef int size_INT64_ARRAY(arg):
-    return sizeof(int64_t) * len(arg)
+cdef int size_INT64_ARRAY(int count):
+    return sizeof(int64_t) * count
 
-cdef int size_UINT64_ARRAY(arg):
-    return sizeof(uint64_t) * len(arg)
+cdef int size_UINT64_ARRAY(int count):
+    return sizeof(uint64_t) * count
 
-cdef int size_FLOAT_ARRAY(arg):
-    return sizeof(float) * len(arg)
+cdef int size_FLOAT_ARRAY(int count):
+    return sizeof(float) * count
 
-cdef int size_DOUBLE_ARRAY(arg):
-    return sizeof(double) * len(arg)
+cdef int size_DOUBLE_ARRAY(int count):
+    return sizeof(double) * count
 
-cdef int size_LONG_DOUBLE_ARRAY(arg):
-    return sizeof(long double) * len(arg)
+cdef int size_LONG_DOUBLE_ARRAY(int count):
+    return sizeof(long double) * count
 
-ctypedef int (*type_size_fn_t)(arg)
+ctypedef int (*type_size_fn_t)(int count)
 cdef type_size_fn_t type_sizes[SOS_TYPE_LAST+1]
 type_sizes[<int>SOS_TYPE_INT16] = size_INT16
 type_sizes[<int>SOS_TYPE_INT32] = size_INT32

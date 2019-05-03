@@ -217,7 +217,9 @@ typedef struct sos_attr_data_s {
 	uint32_t pad:24;
 	uint32_t el_sz:8;	/* The size of each element if array */
 	uint32_t count:24;	/* The number of array elements if array */
-	uint32_t size;		/* The size of the attribute in bytes */
+	uint32_t size;		/* The size of the attribute in bytes. For
+				   an array, this is the array 'descriptor',
+				   not the array itself */
 	uint64_t offset;	/* location of attribute in the object */
 	ods_ref_t ext_ref;	/* reference to extended data */
 } *sos_attr_data_t;
