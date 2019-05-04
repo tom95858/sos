@@ -131,7 +131,7 @@ static sos_index_t __sos_index_alloc(sos_t sos, const char *name)
  * \retval !0 A Unix error code
  */
 int sos_index_new(sos_t sos, const char *name,
-		  const char *idx_type, const char *key_type,
+		  const char *idx_type, sos_type_t key_type,
 		  const char *idx_args)
 {
 	int rc;
@@ -148,8 +148,7 @@ int sos_index_new(sos_t sos, const char *name,
 	if (len >= SOS_INDEX_TYPE_LEN)
 		return EINVAL;
 
-	len = strlen(key_type);
-	if (len >= SOS_INDEX_KEY_TYPE_LEN)
+	if (key_type < SOS_TYPE_FIRST || key_type > SOS_TYPE_LAST)
 		return EINVAL;
 
 	if (!idx_args)
@@ -176,9 +175,10 @@ int sos_index_new(sos_t sos, const char *name,
 	}
 	SOS_IDX(idx_obj)->ref_count = 1;
 	SOS_IDX(idx_obj)->mode = 0664;
+	SOS_IDX(idx_obj)->key_type_id = key_type;
 	strcpy(SOS_IDX(idx_obj)->name, name);
 	strcpy(SOS_IDX(idx_obj)->idx_type, idx_type);
-	strcpy(SOS_IDX(idx_obj)->key_type, key_type);
+	strcpy(SOS_IDX(idx_obj)->key_type, __sos_index_key_type(key_type));
 	strcpy(SOS_IDX(idx_obj)->args, idx_args);
 
 	idx_ref.ref.ods = 0;
@@ -188,7 +188,8 @@ int sos_index_new(sos_t sos, const char *name,
 		goto err_0;
 
 	sprintf(tmp_path, "%s/%s_idx", sos->path, name);
-	rc = ods_idx_create(tmp_path, sos->o_mode, idx_type, key_type, idx_args);
+	rc = ods_idx_create(tmp_path, sos->o_mode, idx_type,
+			    __sos_index_key_type(key_type), idx_args);
 	if (rc)
 		goto err_1;
 	ods_obj_put(idx_obj);
@@ -240,32 +241,33 @@ sos_index_t sos_index_open(sos_t sos, const char *name)
 		errno = rc;
 		goto err_2;
 	}
-
+	idx_obj = ods_ref_as_obj(sos->idx_ods, idx_ref.ref.obj);
+	if (!idx_obj) {
+		errno = EINVAL;
+		goto err_2;
+	}
 	sprintf(tmp_path, "%s/%s_idx", sos->path, name);
- retry:
 	index->idx = ods_idx_open(tmp_path, sos->o_perm);
 	if (!index->idx) {
-		if (idx_obj)
-			/* Already failed once, err out */
-			goto err_3;
 		/* Attempt to create if it does not exist. */
 		if (errno != ENOENT)
-			goto err_2;
-		idx_obj = ods_ref_as_obj(sos->idx_ods, idx_ref.ref.obj);
-		if (!idx_obj) {
-			errno = EINVAL;
-			goto err_2;
-		}
+			goto err_3;
 		rc = ods_idx_create(tmp_path,
 				    SOS_IDX(idx_obj)->mode,
 				    SOS_IDX(idx_obj)->idx_type,
 				    SOS_IDX(idx_obj)->key_type,
 				    SOS_IDX(idx_obj)->args);
-		if (!rc)
-			goto retry;
-		errno = rc;
-		goto err_3;
+		if (!rc) {
+			index->idx = ods_idx_open(tmp_path, sos->o_perm);
+			if (!index->idx) {
+				errno = rc;
+				goto err_3;
+			}
+		} else {
+			goto err_3;
+		}
 	}
+	index->key_type = SOS_IDX(idx_obj)->key_type_id;
 	ods_obj_put(idx_obj);
 	ods_unlock(sos->idx_ods, 0);
 	return index;
@@ -643,6 +645,14 @@ int sos_index_close(sos_index_t index, sos_commit_t flags)
 }
 
 /**
+ * \brief Return the key type as a sos_type_t
+ */
+sos_type_t sos_index_key_type(sos_index_t index)
+{
+	return index->key_type;
+}
+
+/**
  * \brief Return the size of the index's key
  *
  * Returns the native size of the index's key values. If the key value
@@ -783,18 +793,19 @@ void sos_container_index_list(sos_t sos, FILE *fp)
 	ods_iter_t iter = ods_iter_new(sos->idx_idx);
 	if (!fp)
 		fp = stdout;
-	fprintf(fp, "%-20s %-20s %-20s %-20s\n",
-		"Name", "Index Type", "Key Type", "Index Args");
+	fprintf(fp, "%-20s %-20s %-20s %-8s %-20s\n",
+		"Name", "Index Type", "Key Type", "Sos Type", "Index Args");
 	fprintf(fp,
 		"-------------------- -------------------- -------------------- "
-		"--------------------\n");
+		"-------- --------------------\n");
 	for (rc = ods_iter_begin(iter); !rc; rc = ods_iter_next(iter)) {
 		idx_ref.idx_data = ods_iter_data(iter);
 		ods_obj_t idx_obj = ods_ref_as_obj(sos->idx_ods, idx_ref.ref.obj);
-		fprintf(fp, "%-20s %-20s %-20s %-20s\n",
+		fprintf(fp, "%-20s %-20s %-20s %8d %-20s\n",
 			SOS_IDX(idx_obj)->name,
 			SOS_IDX(idx_obj)->idx_type,
 			SOS_IDX(idx_obj)->key_type,
+			SOS_IDX(idx_obj)->key_type_id,
 			SOS_IDX(idx_obj)->args
 			);
 		ods_obj_put(idx_obj);

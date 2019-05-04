@@ -1205,5 +1205,158 @@ sos_comp_key_spec_t sos_comp_key_get(sos_key_t key, size_t *len)
 	return key_values;
 }
 
+static int TIMESTAMP_cmp(sos_key_t a, sos_key_t b)
+{
+	ods_key_value_t ka = a->as.key;
+	ods_key_value_t kb = b->as.key;
+	if (ka->tv_[0].tv_sec < kb->tv_[0].tv_sec)
+		return -1;
+	if (ka->tv_[0].tv_sec > kb->tv_[0].tv_sec)
+		return 1;
+	if (ka->tv_[0].tv_usec < kb->tv_[0].tv_usec)
+		return -1;
+	if (ka->tv_[0].tv_usec > kb->tv_[0].tv_usec)
+		return 1;
+	return 0;
+}
+
+static int OBJ_cmp(sos_key_t a, sos_key_t b)
+{
+	assert(0 == "OBJ reference keys are not supported");
+}
+
+static int OBJ_ARRAY_cmp(sos_key_t a, sos_key_t b)
+{
+	assert(0 == "OBJ reference keys are not supported");
+}
+
+static int STRUCT_cmp(sos_key_t a, sos_key_t b)
+{
+	ods_key_value_t ka = a->as.key;
+	ods_key_value_t kb = b->as.key;
+	int rc = memcmp(ka->value, kb->value, ka->len);
+	if (!rc)
+		return ka->len - kb->len;
+	return rc;
+}
+
+static int BYTE_ARRAY_cmp(sos_key_t a, sos_key_t b)
+{
+	ods_key_value_t ka = a->as.key;
+	ods_key_value_t kb = b->as.key;
+	int rc = memcmp(ka->value, kb->value, ka->len);
+	if (!rc)
+		return ka->len - kb->len;
+	return rc;
+}
+
+static int CHAR_ARRAY_cmp(sos_key_t a, sos_key_t b)
+{
+	ods_key_value_t ka = a->as.key;
+	ods_key_value_t kb = b->as.key;
+	int rc = strncmp((char *)ka->value, (char *)kb->value, ka->len);
+	if (!rc)
+		return ka->len - kb->len;
+	return rc;
+}
+
+#define KEY_CMP(_n_, _f_)				\
+static int _n_ ## _cmp(sos_key_t a, sos_key_t b)	\
+{							\
+	ods_key_value_t ka = a->as.key;			\
+	ods_key_value_t kb = b->as.key;			\
+	if (ka-> _f_ [0] < kb-> _f_ [0])		\
+		return -1;				\
+	if (ka-> _f_ [0] > kb-> _f_ [0])		\
+		return 1;				\
+	return 0;					\
+}
+
+#define ARR_KEY_CMP(_n_, _f_)					\
+static int _n_ ## _cmp(sos_key_t a, sos_key_t b)		\
+{								\
+	ods_key_value_t ka = a->as.key;				\
+	ods_key_value_t kb = b->as.key;				\
+	int i, l;						\
+	size_t cmp_len = (ka->len < kb->len ? ka->len : kb->len); \
+	l = 0;							\
+	for (i = 0; l < cmp_len; i++) {				\
+		if (ka-> _f_ [i] < kb-> _f_ [i])		\
+			return -1;				\
+		if (ka-> _f_ [i] > kb-> _f_ [i])		\
+			return 1;				\
+		l += sizeof(ka-> _f_ [0]);			\
+	}							\
+	return ka->len - kb->len;				\
+}
+
+KEY_CMP(INT16, int16_)
+KEY_CMP(INT32, int32_)
+KEY_CMP(INT64, int64_)
+KEY_CMP(UINT16, uint16_)
+KEY_CMP(UINT32, uint32_)
+KEY_CMP(UINT64, uint64_)
+KEY_CMP(FLOAT, float_)
+KEY_CMP(DOUBLE, double_)
+KEY_CMP(LONG_DOUBLE, long_double_)
+
+ARR_KEY_CMP(INT16_ARRAY, int16_)
+ARR_KEY_CMP(INT32_ARRAY, int32_)
+ARR_KEY_CMP(INT64_ARRAY, int64_)
+ARR_KEY_CMP(UINT16_ARRAY, uint16_)
+ARR_KEY_CMP(UINT32_ARRAY, uint32_)
+ARR_KEY_CMP(UINT64_ARRAY, uint64_)
+ARR_KEY_CMP(FLOAT_ARRAY, float_)
+ARR_KEY_CMP(DOUBLE_ARRAY, double_)
+ARR_KEY_CMP(LONG_DOUBLE_ARRAY, long_double_)
+
+typedef int (*cmp_fn_t)(sos_key_t a, sos_key_t b);
+static cmp_fn_t cmp_fn_table[] = {
+	[SOS_TYPE_INT16] = INT16_cmp,
+	[SOS_TYPE_INT32] = INT32_cmp,
+	[SOS_TYPE_INT64] = INT64_cmp,
+	[SOS_TYPE_UINT16] = UINT16_cmp,
+	[SOS_TYPE_UINT32] = UINT32_cmp,
+	[SOS_TYPE_UINT64] = UINT64_cmp,
+	[SOS_TYPE_FLOAT] = FLOAT_cmp,
+	[SOS_TYPE_DOUBLE] = DOUBLE_cmp,
+	[SOS_TYPE_LONG_DOUBLE] = LONG_DOUBLE_cmp,
+	[SOS_TYPE_OBJ] = OBJ_cmp,
+	[SOS_TYPE_STRUCT] = STRUCT_cmp,
+	[SOS_TYPE_TIMESTAMP] = TIMESTAMP_cmp,
+	[SOS_TYPE_CHAR_ARRAY] = CHAR_ARRAY_cmp,
+	[SOS_TYPE_BYTE_ARRAY] = BYTE_ARRAY_cmp,
+	[SOS_TYPE_INT16_ARRAY] = INT16_ARRAY_cmp,
+	[SOS_TYPE_INT32_ARRAY] = INT32_ARRAY_cmp,
+	[SOS_TYPE_INT64_ARRAY] = INT64_ARRAY_cmp,
+	[SOS_TYPE_UINT16_ARRAY] = UINT16_ARRAY_cmp,
+	[SOS_TYPE_UINT32_ARRAY] = UINT32_ARRAY_cmp,
+	[SOS_TYPE_UINT64_ARRAY] = UINT64_ARRAY_cmp,
+	[SOS_TYPE_FLOAT_ARRAY] = FLOAT_ARRAY_cmp,
+	[SOS_TYPE_DOUBLE_ARRAY] = DOUBLE_ARRAY_cmp,
+	[SOS_TYPE_LONG_DOUBLE_ARRAY] = LONG_DOUBLE_ARRAY_cmp,
+	[SOS_TYPE_OBJ_ARRAY] = OBJ_ARRAY_cmp,
+};
+
+/**
+ * \brief Compare two keys
+ *
+ * Compares <tt>a</tt> and <tt>b</tt> and returns <0 if lhs < rhs, 0 if
+ * lhs == rhs, and >0 if lhs > rhs
+ *
+ * \param lhs The lhs
+ * \param rhs The rhs
+ * \param type The Sos data type type of the keys
+ * \returns The result as described above
+ */
+int sos_key_cmp(sos_key_t lhs, sos_key_t rhs, sos_type_t type)
+{
+	assert(type >= SOS_TYPE_FIRST && type <= SOS_TYPE_LAST);
+
+	if (cmp_fn_table[type])
+		return cmp_fn_table[type](lhs, rhs);
+
+	return STRUCT_cmp(lhs, rhs);
+}
 
 /** @} */

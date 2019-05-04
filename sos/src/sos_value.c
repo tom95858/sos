@@ -200,41 +200,21 @@ static int OBJ_ARRAY_cmp(sos_value_t a, sos_value_t b, size_t size)
 	return a_len - b_len;
 }
 
-#if 0
-#define ARRAY_CMP(_n_, _t_, _f_)					\
-	static int _n_ ## _cmp(sos_value_t a, sos_value_t b, size_t size) \
-	{								\
-		size_t a_len = sos_value_size(a);			\
-		size_t b_len = sos_value_size(b);			\
-		int i;							\
-		size_t cmp_len = (a_len < b_len ? a_len : b_len);	\
-		for (i = 0; i < cmp_len / sizeof(_t_); i++) {		\
-			_t_ av = a->data->array.data._f_[i];		\
-			_t_ bv = b->data->array.data._f_[i];		\
-			if (av < bv)					\
-				return -1;				\
-			if (av > bv)					\
-				return 1;				\
-		}							\
-		return a_len - b_len;					\
-	}
-#else
-#define ARRAY_CMP(_n_, _t_, _f_)					\
+#define ARRAY_CMP(_n_, _t_, _f_)				\
 static int _n_ ## _cmp(sos_value_t a, sos_value_t b, size_t size) \
 {								\
-	size_t a_len = sos_array_count(a);	\
-	size_t b_len = sos_array_count(b);	\
+	size_t a_len = sos_array_count(a);			\
+	size_t b_len = sos_array_count(b);			\
 	int i;							\
 	size_t cmp_len = (a_len < b_len ? a_len : b_len);	\
 	for (i = 0; i < cmp_len; i++) {				\
 		if (sos_array_data(a, _f_)[i] < sos_array_data(b, _f_)[i]) \
 			return -1;				\
-		if (sos_array_data(a, _f_)[i] > sos_array_data(b, _f_)[i])	\
+		if (sos_array_data(a, _f_)[i] > sos_array_data(b, _f_)[i]) \
 			return 1;				\
 	}							\
 	return a_len - b_len;					\
 }
-#endif
 
 ARRAY_CMP(INT16_ARRAY, int16_t, int16_)
 ARRAY_CMP(INT32_ARRAY, int32_t, int32_)
