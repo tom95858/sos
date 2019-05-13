@@ -482,6 +482,7 @@ static inline void sos_log(int level, const char *func, int line, char *fmt, ...
 	va_list ap;
 	pid_t tid;
 	struct timespec ts;
+	extern pthread_mutex_t _sos_log_lock;
 
 	if (!__ods_log_fp)
 		return;
@@ -490,12 +491,14 @@ static inline void sos_log(int level, const char *func, int line, char *fmt, ...
 		return;
 
 	tid = (pid_t) syscall (SYS_gettid);
+	pthread_mutex_lock(&_sos_log_lock);
 	clock_gettime(CLOCK_REALTIME, &ts);
 	va_start(ap, fmt);
 	fprintf(__ods_log_fp, "[%d] %d.%09d: sosdb[%d] @ %s:%d | ",
 		tid, ts.tv_sec, ts.tv_nsec, level, func, line);
 	vfprintf(__ods_log_fp, fmt, ap);
 	fflush(__ods_log_fp);
+	pthread_mutex_unlock(&_sos_log_lock);
 }
 
 #define sos_fatal(fmt, ...) sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__)

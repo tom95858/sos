@@ -149,6 +149,7 @@
 LIST_HEAD(cont_list_head, sos_container_s) cont_list;
 #endif
 pthread_mutex_t cont_list_lock;
+pthread_mutex_t _sos_log_lock;
 
 /**
  * \page container_overview Containers

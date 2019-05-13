@@ -131,8 +131,8 @@ void obj_cb(dsos_obj_t *obj, void *ctxt)
 
 	printf("[%5d] server %d status %d flags %08x obj_id %08lx%08lx len %d\n", getpid(),
 	       obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
-	       resp->obj_id.hi,
-	       resp->obj_id.lo,
+	       resp->obj_id.serv,
+	       resp->obj_id.ods,
 	       resp->len);
 	fflush(stdout);
 
@@ -284,17 +284,17 @@ void do_obj_creates()
 	printf("creating objs\n");
 	// Make objs from the schema "small".
 	sz = sizeof(uint64_t);
-	small_attr1 = sos_schema_attr_by_name(schema_small->schema, "attr1");
+	small_attr1 = sos_schema_attr_by_name(schema_small->sos_schema, "attr1");
 	if (!small_attr1) {
 		fprintf(stderr, "could not get attr1 from schema_small\n");
 		exit(1);
 	}
-	big_attr1 = sos_schema_attr_by_name(schema_big->schema, "attr1");
+	big_attr1 = sos_schema_attr_by_name(schema_big->sos_schema, "attr1");
 	if (!big_attr1) {
 		fprintf(stderr, "could not get attr1 from schema_big\n");
 		exit(1);
 	}
-	big_attr2 = sos_schema_attr_by_name(schema_big->schema, "attr2");
+	big_attr2 = sos_schema_attr_by_name(schema_big->sos_schema, "attr2");
 	if (!big_attr2) {
 		fprintf(stderr, "could not get attr2 from schema_big\n");
 		exit(1);

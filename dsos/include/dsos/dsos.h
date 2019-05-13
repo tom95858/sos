@@ -17,6 +17,9 @@ int		*dsos_err_get(void);
 int		dsos_init(const char *config_filename);
 dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_obj_create(dsos_obj_t *obj);
+int		dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key,
+			      sos_obj_ref_t *pref);
+int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path);
 dsos_part_t	*dsos_part_find(dsos_t *cont, const char *name);
 int		dsos_part_state_set(dsos_part_t *part, sos_part_state_t new_state);

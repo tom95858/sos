@@ -59,6 +59,12 @@ typedef struct dsosd_req_s {
 	void			*rma_buf;      // XXX buf from registered heap (temporary)
 } dsosd_req_t;
 
+/* Red-black tree node to map a string to a pointer. */
+struct ptr_rbn {
+	struct rbn	rbn;
+	void		*ptr;
+};
+
 /*
  * Client object. This encapsulates all state created on behalf of the
  * client.
@@ -67,6 +73,8 @@ typedef struct dsosd_client_s {
 	ods_atomic_t		refcount;
 	zap_ep_t		ep;            // zap active endpoint
 	zap_map_t		rmap;          // map for shared heap
+	struct rbt		idx_rbt;       // maps idx name -> sos_index_t
+	pthread_mutex_t		idx_rbt_lock;
 #if 1
 	// XXX temporary, until SOS can alloc from reg mem
 	mm_region_t		heap;          // heap shared w/servers
@@ -79,17 +87,19 @@ typedef struct dsosd_client_s {
 void		dsosd_client_get(dsosd_client_t *client);
 dsosd_client_t	*dsosd_client_new(zap_ep_t ep);
 void		dsosd_client_put(dsosd_client_t *client);
-void		dsosd_objid_next(dsosd_objid_t *id, sos_schema_t schema);
 zap_err_t	dsosd_req_complete(dsosd_req_t *req, size_t len);
 void		dsosd_req_get(dsosd_req_t *req);
 dsosd_req_t	*dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t msg_len);
 void		dsosd_req_put(dsosd_req_t *req);
+int		idx_rbn_cmp_fn(void *tree_key, void *key);
 
 sos_schema_template_t	rpc_deserialize_schema_template(char *buf, size_t len);
 void		rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg, size_t len);
 void		rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *msg, size_t len);
 void		rpc_handle_container_new(zap_ep_t ep, dsosd_msg_container_new_req_t *msg, size_t len);
 void		rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len);
+void		rpc_handle_obj_index(zap_ep_t ep, dsosd_msg_obj_index_req_t *msg, size_t len);
+void		rpc_handle_obj_find(zap_ep_t ep, dsosd_msg_obj_find_req_t *msg, size_t len);
 void		rpc_handle_part_create(zap_ep_t ep, dsosd_msg_part_create_req_t *msg, size_t len);
 void		rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t len);
 void		rpc_handle_part_set_state(zap_ep_t ep, dsosd_msg_part_set_state_req_t *msg, size_t len);
@@ -102,6 +112,9 @@ void		rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_templat
 #define dsosd_error(fmt, ...)	sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsosd_fatal(fmt, ...) \
 	do {									\
+		if (!__ods_log_fp)						\
+			__ods_log_fp = stderr;					\
+		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
 		exit(1);							\
 	} while (0);

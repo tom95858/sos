@@ -11,6 +11,66 @@
 #include <ods/rbt.h>
 #include "dsos_priv.h"
 
+const char *dsos_msg_type_to_str(int id)
+{
+	switch (id) {
+	    case DSOSD_MSG_PING_REQ:
+		return "DSOSD_MSG_PING_REQ";
+	    case DSOSD_MSG_PING_RESP:
+		return "DSOSD_MSG_PING_RESP";
+	    case DSOSD_MSG_OBJ_CREATE_REQ:
+		return "DSOSD_OBJ_CREATE_REQ";
+	    case DSOSD_MSG_OBJ_CREATE_RESP:
+		return "DSOSD_OBJ_CREATE_RESP";
+	    case DSOSD_MSG_OBJ_INDEX_REQ:
+		return "DSOSD_OBJ_INDEX_REQ";
+	    case DSOSD_MSG_OBJ_INDEX_RESP:
+		return "DSOSD_OBJ_INDEX_RESP";
+	    case DSOSD_MSG_OBJ_FIND_REQ:
+		return "DSOSD_OBJ_FIND_REQ";
+	    case DSOSD_MSG_OBJ_FIND_RESP:
+		return "DSOSD_OBJ_FIND_RESP";
+	    case DSOSD_MSG_CONTAINER_NEW_REQ:
+		return "DSOSD_CONTAINER_NEW_REQ";
+	    case DSOSD_MSG_CONTAINER_NEW_RESP:
+		return "DSOSD_CONTAINER_NEW_RESP";
+	    case DSOSD_MSG_CONTAINER_OPEN_REQ:
+		return "DSOSD_CONTAINER_OPEN_REQ";
+	    case DSOSD_MSG_CONTAINER_OPEN_RESP:
+		return "DSOSD_CONTAINER_OPEN_RESP";
+	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
+		return "DSOSD_CONTAINER_CLOSE_REQ";
+	    case DSOSD_MSG_CONTAINER_CLOSE_RESP:
+		return "DSOSD_CONTAINER_CLOSE_RESP";
+	    case DSOSD_MSG_PART_CREATE_REQ:
+		return "DSOSD_PART_CREATE_REQ";
+	    case DSOSD_MSG_PART_CREATE_RESP:
+		return "DSOSD_PART_CREATE_RESP";
+	    case DSOSD_MSG_PART_FIND_REQ:
+		return "DSOSD_PART_FIND_REQ";
+	    case DSOSD_MSG_PART_FIND_RESP:
+		return "DSOSD_PART_FIND_RESP";
+	    case DSOSD_MSG_PART_SET_STATE_REQ:
+		return "DSOSD_PART_SET_STATE_REQ";
+	    case DSOSD_MSG_PART_SET_STATE_RESP:
+		return "DSOSD_PART_SET_STATE_RESP";
+	    case DSOSD_MSG_SCHEMA_FROM_TEMPLATE_REQ:
+		return "DSOSD_SCHEMA_FROM_TEMPLATE_REQ";
+	    case DSOSD_MSG_SCHEMA_FROM_TEMPLATE_RESP:
+		return "DSOSD_SCHEMA_FROM_TEMPLATE_RESP";
+	    case DSOSD_MSG_SCHEMA_ADD_REQ:
+		return "DSOSD_SCHEMA_ADD_REQ";
+	    case DSOSD_MSG_SCHEMA_ADD_RESP:
+		return "DSOSD_SCHEMA_ADD_RESP";
+	    case DSOSD_MSG_SCHEMA_BY_NAME_REQ:
+		return "DSOSD_SCHEMA_BY_NAME_REQ";
+	    case DSOSD_MSG_SCHEMA_BY_NAME_RESP:
+		return "DSOSD_SCHEMA_BY_NAME_RESP";
+	    default:
+		return "<invalid>";
+	}
+}
+
 static void client_cb(zap_ep_t ep, zap_event_t ev)
 {
 	dsos_req_t		*req;
@@ -37,7 +97,8 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		// We're disconnected from a server. This probably is fatal
 		// for the client.
 		// XXX
-		zap_free(ep);
+		dsos_error("ZAP_EVENT_DISCONNECTED ep %p conn %p\n", ep, conn);
+//		zap_free(ep);
 		break;
 	    case ZAP_EVENT_REJECTED:
 	    case ZAP_EVENT_CONNECT_ERROR:
@@ -49,11 +110,13 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 	    case ZAP_EVENT_RECV_COMPLETE:
 		resp = (dsosd_msg_t *)ev->data;
 		req = dsos_req_find(resp);
-		dsos_debug("ZAP_EVENT_RECV_COMPLETE resp %p len %d id %ld type %d status %d flags 0x%x conn %p req %p\n",
-			   resp, ev->data_len, resp->u.hdr.id, resp->u.hdr.type, resp->u.hdr.status, resp->u.hdr.flags,
-			   conn, req);
+		dsos_debug("ZAP_EVENT_RECV_COMPLETE %s srv %d req %p resp %p len %d "
+			   "id %ld type %d status %d flags 0x%x conn %p\n",
+			   dsos_msg_type_to_str(resp->u.hdr.type), conn->server_id,
+			   req, resp, ev->data_len, resp->u.hdr.id, resp->u.hdr.type,
+			   resp->u.hdr.status, resp->u.hdr.flags, conn);
 		if (!req)  {
-			dsos_error("no req for id %ld\n", resp->u.hdr.id);
+			dsos_fatal("no req for id %ld\n", resp->u.hdr.id);
 			break;
 		}
 		// On send, req->msg points to a send buffer (malloc'd by dsos_req_new but
@@ -77,6 +140,7 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		dsos_error("unhandled event %s\n", zap_event_str(ev->type));
 		break;
 	}
+	dsos_debug("done\n");
 }
 
 int dsos_connect(const char *host, const char *service, int server_id)

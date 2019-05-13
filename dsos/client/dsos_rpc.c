@@ -1,8 +1,42 @@
 #include <string.h>
 #include "dsos_priv.h"
 
+static void rpc_signal_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	dsosd_msg_t	*resp;
+
+	/*
+	 * The req->resp response buffer is invalid after this
+	 * function returns, so copy out the data here. The response
+	 * typically is small.
+	 */
+	if (req->resp && len) {
+		resp = (dsosd_msg_t *)malloc(len);
+		if (!resp)
+			dsos_fatal("out of memory\n");
+		memcpy(resp, req->resp, len);
+	} else
+		resp = NULL;
+
+	req->resp = resp;
+
+#ifdef DSOS_DEBUG
+	if (resp) {
+		dsos_debug("req %p len %d ctxt %p msg %p id %ld "
+			   "type %d status %d copied to %p\n",
+			   req, len, ctxt, req->msg, resp->u.hdr.id,
+			   resp->u.hdr.type, resp->u.hdr.status, resp);
+	} else {
+		dsos_debug("req %p len %d ctxt %p flushed\n",
+			   req, len, ctxt);
+	}
+#endif
+	sem_post(&req->sem);
+}
+
 static void rpc_all_signal_cb(dsos_req_all_t *req_all, void *ctxt)
 {
+	dsos_debug("req_all %p signaling\n", req_all);
 	sem_post(&req_all->sem);
 }
 
@@ -451,6 +485,21 @@ static char *serialize_str(const char *v, char **pp, size_t *psz)
 	}
 }
 
+static char *serialize_buf(const void *v, size_t len, char **pp, size_t *psz)
+{
+	char	*ret = *pp;
+
+	if (len <= *psz) {
+		memcpy(*pp, v, len);
+		*pp  += len;
+		*psz -= len;
+		return ret;
+	} else {
+		*psz = -1;
+		return NULL;
+	}
+}
+
 static uint32_t deserialize_uint32(char **pbuf, size_t *psz)
 {
 	uint32_t	ret = *(uint32_t *)*pbuf;
@@ -505,6 +554,19 @@ void *dsos_rpc_serialize_schema_template(sos_schema_template_t t, void *buf, siz
 	}
 }
 
+// Serialize as byte_count (32 bits) followed by attr_data.
+void *dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz)
+{
+	size_t	sz = sos_value_size(v);
+
+	serialize_uint32(sz, buf, psz);
+
+	if (sos_value_is_array(v))
+		return serialize_buf(&v->data->array.data, sz, buf, psz);
+	else
+		return serialize_buf(&v->data->prim, sz, buf, psz);
+}
+
 sos_schema_template_t dsos_rpc_deserialize_schema_template(char *buf, size_t len)
 {
 	int			i, j;
@@ -551,4 +613,127 @@ void dsos_rpc_free_schema_template(sos_schema_template_t t)
 			free(t->attrs[i].join_list);
 	}
 	free(t);
+}
+
+static void index_obj_cb(dsos_req_all_t *req_all, void *ctxt)
+{
+	dsos_obj_t	*obj  = ctxt;
+
+	dsos_debug("obj %p\n", obj);
+
+	obj->req_all = req_all;
+	if (obj->cb)
+		obj->cb(obj, obj->ctxt);
+}
+
+int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
+{
+	int				i, j;
+	size_t				len;
+	char				*buf;
+	dsos_req_all_t			*req_all;
+	dsosd_msg_obj_index_req_t	*msg;
+	sos_value_t			v;
+	dsos_obj_t			*obj;
+
+	obj = args_inp[0].obj;
+
+	req_all = dsos_req_all_new(index_obj_cb, obj);
+
+	/*
+	 * Copy in args to the request messages. Not every server
+	 * is always involved. Skip those where the attribute count
+	 * is 0 (there is nothing to send).
+	 */
+	for (i = 0; i < g.num_servers; ++i) {
+		msg = (dsosd_msg_obj_index_req_t *)req_all->reqs[i]->msg;
+		if (args_inp[i].num_attrs == 0) {
+			msg->hdr.type = DSOSD_MSG_INVALID;  // no RPC for this server
+			continue;
+		}
+		msg->hdr.type      = DSOSD_MSG_OBJ_INDEX_REQ;
+		msg->hdr.flags     = 0;
+		msg->hdr.status    = 0;
+		msg->cont_handle   = obj->schema->cont->handles[i];
+		msg->schema_handle = obj->schema->handles[i];
+		msg->obj_id        = obj->obj_id;
+		msg->num_attrs     = args_inp[i].num_attrs;
+
+		// len is what's available in the serialization buffer
+		len = DSOSD_MSG_MAX_DATA - sizeof(dsosd_msg_obj_index_req_t);
+		buf = msg->data;
+		for (j = 0; j < args_inp[i].num_attrs; ++j) {
+			v = args_inp[i].attrs[j];
+			serialize_uint32(sos_attr_id(v->attr), &buf, &len);
+			if (!dsos_rpc_serialize_attr_value(v, &buf, &len)) {
+				dsos_error("attr sz %d too big\n", sos_value_size(v));
+				sos_value_put(v);
+				sos_value_free(v);
+				return E2BIG;
+			}
+			sos_value_put(v);
+			sos_value_free(v);
+		}
+		msg->data_len = buf - msg->data;
+		dsos_debug("obj_id %08lx%08lx server %d has %d attrs data_len %d\n", obj->obj_id,
+			   i, args_inp[i].num_attrs, msg->data_len);
+		req_all->reqs[i]->msg_len = sizeof(dsosd_msg_obj_index_req_t) + msg->data_len;
+	}
+
+	return dsos_req_all_submit(req_all, 0);
+}
+
+int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp)
+{
+	int				ret;
+	void				*key_data;
+	size_t				key_sz;
+	size_t				buf_len;
+	char				*buf;
+	dsos_req_t			*req;
+	dsosd_msg_obj_find_req_t	*msg;
+
+	req = dsos_req_new(rpc_signal_cb, NULL);
+	if (!req)
+		return ENOMEM;
+
+	msg = (dsosd_msg_obj_find_req_t *)req->msg;
+	msg->hdr.type      = DSOSD_MSG_OBJ_FIND_REQ;
+	msg->hdr.flags     = 0;
+	msg->hdr.status    = 0;
+	msg->cont_handle   = args_inp->cont_handle;
+	msg->schema_handle = args_inp->schema_handle;
+	msg->attr_id       = sos_attr_id(args_inp->attr);
+
+	key_sz   = sos_key_len(args_inp->key);
+	key_data = sos_key_value(args_inp->key);
+
+	// buf_len is what's available in the serialization buffer
+	buf_len = DSOSD_MSG_MAX_DATA - sizeof(dsosd_msg_obj_find_req_t);
+	buf = msg->data;
+	serialize_uint32(key_sz, &buf, &buf_len);
+	serialize_buf(key_data, key_sz, &buf, &buf_len);
+	msg->data_len = buf - msg->data;
+
+	dsos_debug("cont %p schema %p attr_id %d key_sz %d\n",
+		   msg->cont_handle, msg->schema_handle, msg->attr_id, key_sz);
+
+	ret = dsos_req_submit(req, &g.conns[args_inp->server_num],
+			      sizeof(dsosd_msg_obj_find_req_t) + msg->data_len);
+	if (ret) {
+		dsos_error("ret %d\n", ret);
+		return ret;
+	}
+
+	sem_wait(&req->sem);
+
+	/* Copy out results from the response. */
+	if (req->resp->u.hdr.status) {
+		dsos_debug("status %d\n", req->resp->u.hdr.status);
+		return req->resp->u.hdr.status;
+	}
+	args_outp->obj_id = req->resp->u.obj_find_resp.obj_id;
+	dsos_debug("obj_id %08lx%08lx\n", args_outp->obj_id.ref.ods, args_outp->obj_id.ref.obj);
+
+	return 0;
 }

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/syscall.h>
 #include <getopt.h>
 #include <time.h>
 #include <semaphore.h>
@@ -15,13 +16,21 @@
 
 int		num_iters  = 4;
 int		sleep_msec = 0;
-char		id;
+int		lookup = 0;
+uint8_t		id;
 struct timespec	ts;
 uint64_t	nsecs;
 sem_t		sem;
+sem_t		sem2;
+sos_obj_ref_t	*refs;
+dsos_t		*cont;
+dsos_schema_t	*schema;
+sos_attr_t	attr_seq, attr_hash, attr_data;
 
 uint64_t	hash(void *buf, int len);
 void		do_obj_creates();
+void		do_lookups();
+dsos_t		*create_cont(char *path, int perms);
 
 void usage(char *av[])
 {
@@ -40,6 +49,7 @@ int main(int ac, char *av[])
 	struct option	lopts[] = {
 		{ "config",	required_argument, NULL, 'c' },
 		{ "id",	        required_argument, NULL, 'i' },
+		{ "lookup",     no_argument,       NULL, 'l' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ 0,		0,		   0,     0  }
@@ -52,7 +62,10 @@ int main(int ac, char *av[])
 			config = strdup(optarg);
 			break;
 		    case 'i':
-			id = *optarg;
+			id = atoi(optarg) - 1;
+			break;
+		    case 'l':
+			lookup = 1;
 			break;
 		    case 'n':
 			num_iters = atoi(optarg);
@@ -81,38 +94,99 @@ int main(int ac, char *av[])
 		exit(1);
 	}
 
-	do_obj_creates();
+	if (lookup)
+		do_lookups();
+	else
+		do_obj_creates();
 
+	dsos_container_close(cont);
 	dsos_disconnect();
 	sleep(1);
 }
 
+void do_init()
+{
+	cont = dsos_container_open("/tmp/cont.sos", 0755);
+	if (!cont) {
+		printf("creating container\n");
+		cont = create_cont("/tmp/cont.sos", 0755);
+		if (!cont) {
+			fprintf(stderr, "could not create container\n");
+			exit(1);
+		}
+	}
+	schema = dsos_schema_by_name(cont, "test");
+	if (!schema) {
+		fprintf(stderr, "could not open schema 'test'\n");
+		exit(1);
+	}
+	attr_seq = sos_schema_attr_by_name(schema->sos_schema, "seq");
+	if (!attr_seq) {
+		fprintf(stderr, "could not get attr seq from schema\n");
+		exit(1);
+	}
+	attr_hash = sos_schema_attr_by_name(schema->sos_schema, "hash");
+	if (!attr_hash) {
+		fprintf(stderr, "could not get attr hash from schema\n");
+		exit(1);
+	}
+	attr_data = sos_schema_attr_by_name(schema->sos_schema, "data");
+	if (!attr_data) {
+		fprintf(stderr, "could not get attr data from schema\n");
+		exit(1);
+	}
+}
+
+void idx_cb(dsos_obj_t *obj, void *ctxt)
+{
+	int				i;
+	pid_t				tid;
+	uint64_t			obj_serial = (uintptr_t)ctxt;
+	dsosd_msg_obj_index_resp_t	*resp;
+
+	tid = (pid_t)syscall(SYS_gettid);
+	for (i = 0; i < obj->req_all->num_servers; ++i) {
+		resp = (dsosd_msg_obj_index_resp_t *)obj->req_all->reqs[i]->resp;
+		if (!resp)
+			continue;
+		if (resp->hdr.status)
+			printf("[%5d] obj %d server %d status %d\n", tid, obj_serial,
+			       i, resp->hdr.status);
+	}
+
+	sem_post(&sem2);
+}
+
 void obj_cb(dsos_obj_t *obj, void *ctxt)
 {
+	int				ret;
+	pid_t				tid;
 	uint64_t			i = (uintptr_t)ctxt;
 	dsosd_msg_obj_create_resp_t	*resp = (dsosd_msg_obj_create_resp_t *)obj->req->resp;
 
+	tid = (pid_t)syscall(SYS_gettid);
 	if (!resp) {
-		printf("[%5d] obj %p ctxt %p no response from server\n", getpid(), obj, ctxt);
+		printf("[%5d] obj %p ctxt %p no response from server\n", tid, obj, ctxt);
 		return;
 	}
 
-	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n", getpid(),
+	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n", tid,
 	       i, obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
-	       resp->obj_id.hi,
-	       resp->obj_id.lo,
+	       resp->obj_id.serv,
+	       resp->obj_id.ods,
 	       resp->len);
 	fflush(stdout);
 
+	refs[i] = resp->obj_id.as_obj_ref;
 	sem_post(&sem);
 }
 
 struct sos_schema_template schema_template = {
 	.name = "test",
 	.attrs = {
-		{ .name = "seq",  .type = SOS_TYPE_UINT64, .indexed = 1 },
-		{ .name = "hash", .type = SOS_TYPE_UINT64 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .size = 4000 },
+		{ .name = "seq",  .type = SOS_TYPE_UINT64,     .indexed = 1 },
+		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 0 },
+		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 1, .size = 400 },
 		{ .name = NULL }
 	}
 };
@@ -186,51 +260,21 @@ dsos_t *create_cont(char *path, int perms)
 
 void do_obj_creates()
 {
-	int		i, j, ret, num;
+	int		i, j, ret;
+	uint64_t	num;
 	uint32_t	x;
 	char		*mydata, *p;
 	dsos_obj_t	*obj;
-	dsos_t		*cont;
-	dsos_schema_t	*schema;
-	sos_attr_t	attr_seq, attr_hash, attr_data;
+	sos_key_t	key;
+	sos_obj_ref_t	obj_ref;
 
-	printf("opening container\n");
-	cont = dsos_container_open("/tmp/cont.sos", 0755);
-	if (!cont) {
-		printf("creating container\n");
-		cont = create_cont("/tmp/cont.sos", 0755);
-		if (!cont) {
-			fprintf(stderr, "could not create container\n");
-			exit(1);
-		}
-	}
-	printf("getting schema\n");
-	schema = dsos_schema_by_name(cont, "test");
-	if (!schema) {
-		fprintf(stderr, "could not open schema 'test'\n");
-		exit(1);
-	}
+	do_init();
 
-	printf("creating objs\n");
-
-	attr_seq = sos_schema_attr_by_name(schema->schema, "seq");
-	if (!attr_seq) {
-		fprintf(stderr, "could not get attr seq from schema\n");
-		exit(1);
-	}
-	attr_hash = sos_schema_attr_by_name(schema->schema, "hash");
-	if (!attr_hash) {
-		fprintf(stderr, "could not get attr hash from schema\n");
-		exit(1);
-	}
-	attr_data = sos_schema_attr_by_name(schema->schema, "data");
-	if (!attr_data) {
-		fprintf(stderr, "could not get attr data from schema\n");
-		exit(1);
-	}
-	mydata = malloc(4000);
+	mydata = malloc(4001);
+	refs = malloc(num_iters * sizeof(*refs));
 	sem_init(&sem, 0, 0);
-	num = 0;
+	sem_init(&sem2, 0, 0);
+	num = num_iters * id;
 	x = 0;
 	for (i = 0; i < num_iters; ++i) {
 		obj = dsos_obj_alloc(schema, obj_cb, (void *)(uintptr_t)i);
@@ -238,27 +282,81 @@ void do_obj_creates()
 			fprintf(stderr, "could not create object");
 			exit(1);
 		}
-#if 1
+#if 0
 		for (p = mydata, j = 0; j < 500; ++j, p += 8)
 			sprintf(p, " %06x%c", x++, id);
-#else
-		strcpy((char *)mydata, "Bo was here.");
 #endif
-		sos_obj_attr_value_set(obj->sos_obj, attr_seq, num + id);
-		num += 10;
-		sos_obj_attr_value_set(obj->sos_obj, attr_hash, hash(mydata, 4000));
-		sos_obj_attr_value_set(obj->sos_obj, attr_data, 4000, mydata);
+		sprintf(mydata, "seq=%08x", num);
+		sos_obj_attr_value_set(obj->sos_obj, attr_seq, num);
+		num += 1;
+		sos_obj_attr_value_set(obj->sos_obj, attr_hash, hash(mydata, 400));
+		sos_obj_attr_value_set(obj->sos_obj, attr_data, strlen(mydata)+1, mydata);
+
 		ret = dsos_obj_create(obj);
 		if (ret) {
 			fprintf(stderr, "dsos_obj_create %d\n", ret);
 			exit(1);
 		}
+		sem_wait(&sem);
+
+		ret = dsos_obj_index(obj, idx_cb, (void *)(uintptr_t)i);
+		if (ret) {
+			fprintf(stderr, "err %d indexing obj\n", ret);
+			exit(1);
+		}
+		sem_wait(&sem2);
+
+		dsos_obj_free(obj);
+
 		nanosleep(&ts, NULL);
 	}
+#if 0
 	// Wait until all object-creation callbacks have occurred.
 	for (i = 0; i < num_iters; ++i)
 		sem_wait(&sem);
-	dsos_container_close(cont);
+#endif
+
+	printf("all objects created:\n");
+	for (i = 0; i < num_iters; ++i) {
+		printf("\t%08lx%08lx\n", refs[i]);
+	}
+
+#if 1
+	num = num_iters * id;
+	for (i = 0; i < num_iters; ++i) {
+		key = sos_key_for_attr(NULL, attr_seq, num);
+		ret = dsos_obj_find(schema, attr_seq, key, &obj_ref);
+		printf("obj %d ret %d obj_ref %08lx%08lx\n", num, ret, obj_ref.ref.ods, obj_ref.ref.obj);
+		fflush(stdout);
+		if (ret || memcmp(&refs[num - num_iters*id], &obj_ref, sizeof(obj_ref))) {
+			printf("DIFF\n");
+			break;
+		}
+		++num;
+	}
+#endif
+}
+
+void do_lookups()
+{
+	int		i, ret;
+	uint64_t	num;
+	sos_key_t	key;
+	sos_obj_ref_t	obj_ref;
+
+	do_init();
+
+	num = 0;
+	for (i = 0; i < num_iters; ++i) {
+		key = sos_key_for_attr(NULL, attr_seq, num);
+		ret = dsos_obj_find(schema, attr_seq, key, &obj_ref);
+		if (ret) {
+			printf("ret %d\n", ret);
+			exit(1);
+		}
+		printf("obj %d obj_ref %08lx%08lx\n", num, obj_ref.ref.ods, obj_ref.ref.obj);
+		++num;
+	}
 }
 
 uint64_t hash(void *buf, int len)

@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <errno.h>
 #include "dsos_priv.h"
 
@@ -40,15 +41,18 @@ dsos_req_t *dsos_req_new(dsos_req_cb_t cb, void *ctxt)
 	if (!req || !msg)
 		dsos_fatal("out of memory");
 	req->msg_len_max = zap_max_msg(g.zap);
+	req->msg_len     = 0;
 	req->refcount    = 1;
 	req->ctxt        = ctxt;
 	req->id          = req_next_id++;
 	req->cb          = cb;
 	req->msg         = msg;
+	req->resp        = NULL;
 	req->conn        = NULL;
 	req->msg->u.hdr.id     = req->id;
 	req->msg->u.hdr.status = 0;
 	req->msg->u.hdr.flags  = 0;
+	sem_init(&req->sem, 0, 0);
 	dsos_debug("req %p id %ld msg %p ctxt %p\n", req, req->id, req->msg, req->ctxt);
 	return req;
 }
@@ -75,8 +79,9 @@ int dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len)
 	rbt_ins(&req_rbt, (void *)rbn);
 	pthread_mutex_unlock(&req_rbt_lock);
 
-	dsos_debug("req %p id %ld conn %p msg %p len %d\n", req, req->id, conn,
-		   req->msg, len);
+	dsos_debug("req %p srv %d %s id %ld conn %p msg %p len %d\n", req,
+		   conn->server_id, dsos_msg_type_to_str(req->msg->u.hdr.type),
+		   req->id, conn, req->msg, len);
 
 	/* Wait for resources if necessary. */
 	sem_wait(&conn->flow_sem);
@@ -84,7 +89,6 @@ int dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len)
 	zerr = zap_send(conn->ep, req->msg, len);
 	if (zerr != ZAP_ERR_OK)
 		dsos_error("zap_send error %s len %d\n", zap_err_str(zerr), len);
-	dsos_debug("zap_send %d\n", zerr);
 
 	/*
 	 * Consider req->msg to now be invalid. In this initial implementation, it
@@ -107,6 +111,7 @@ dsos_req_t *dsos_req_find(dsosd_msg_t *resp)
 	rbn = (struct req_rbn *)rbt_find(&req_rbt, (void *)resp->u.hdr.id);
 	if (rbn) {
 		req = rbn->req;
+		if (req == NULL) dsos_fatal("req == NULL\n");
 		req->resp = resp;
 		rbt_del(&req_rbt, (struct rbn *)rbn);
 		free(rbn);
@@ -124,7 +129,11 @@ void dsos_req_get(dsos_req_t *req)
 void dsos_req_put(dsos_req_t *req)
 {
 	if (!ods_atomic_dec(&req->refcount)) {
-		dsos_debug("req %p freed\n", req);
+		dsos_debug("req %p msg %p resp %p freed\n", req, req->msg, req->resp);
+		if (req->msg)
+			free(req->msg);
+		if (req->resp && (req->flags & (REQ_VECTOR_MEMBER | REQ_RESPONSE_RECVD)))
+			free(req->resp);
 		free(req);
 	}
 }
@@ -141,16 +150,19 @@ dsos_req_all_t *dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt)
 	reqs    = malloc(g.num_servers * sizeof(dsos_req_t *));
 	if (!req_all || !msg || !reqs)
 		dsos_fatal("out of memory");
+	req_all->num_servers   = g.num_servers;
 	req_all->msg_len_max   = zap_max_msg(g.zap);
 	req_all->refcount      = 1;
 	req_all->ctxt          = ctxt;
 	req_all->cb            = cb;
 	req_all->msg           = msg;
 	req_all->reqs          = reqs;
-	req_all->num_reqs_pend = g.num_servers;
+	req_all->num_reqs_pend = 0;
 	sem_init(&req_all->sem, 0, 0);
-	for (i = 0; i < g.num_servers; ++i)
+	for (i = 0; i < g.num_servers; ++i) {
 		req_all->reqs[i] = dsos_req_new(req_all_cb, req_all);
+		req_all->reqs[i]->flags |= REQ_VECTOR_MEMBER;
+	}
 
 	dsos_debug("req_all %p msg %p\n", req_all, req_all->msg);
 
@@ -174,11 +186,37 @@ void dsos_req_all_put(dsos_req_all_t *req_all)
 int dsos_req_all_submit(dsos_req_all_t *req_all, size_t len)
 {
 	int		i, ret = 0;
+	dsos_req_t	*req;
+	dsosd_msg_t	*msg;
 
-	dsos_debug("req_all %p len %d\n", req_all, len);
+#ifdef DSOS_DEBUG
+	{
+		int	n;
+
+		for (i = 0, n = 0; i < g.num_servers; ++i) {
+			if (req_all->reqs[i]->msg->u.hdr.type != DSOSD_MSG_INVALID)
+				++n;
+		}
+		dsos_debug("req_all %p for %d servers len %d\n", req_all, n, len);
+	}
+#endif
+
 	dsos_err_clear();
 	for (i = 0; i < g.num_servers; ++i) {
-		ret = dsos_req_submit(req_all->reqs[i], &g.conns[i], len);
+		req = req_all->reqs[i];
+		if (req->msg->u.hdr.type != DSOSD_MSG_INVALID)
+			++req_all->num_reqs_pend;
+	}
+	for (i = 0; i < g.num_servers; ++i) {
+		req = req_all->reqs[i];
+		if (req->msg->u.hdr.type == DSOSD_MSG_INVALID)
+			continue;
+		if (!req->msg_len)
+			req->msg_len = len;
+		ret = dsos_req_submit(req_all->reqs[i], &g.conns[i], req->msg_len);
+		if (ret) {
+			dsos_fatal("ret %d\n", ret);
+		}
 		dsos_err_set(i, ret);
 	}
 	return dsos_err_status();
@@ -188,6 +226,9 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 {
 	dsosd_msg_t	*resp;
 	dsos_req_all_t	*req_all = (dsos_req_all_t *)ctxt;
+
+	assert((req->flags & REQ_RESPONSE_RECVD) == 0);
+	req->flags |= REQ_RESPONSE_RECVD;
 
 	/*
 	 * The req->resp response buffer is invalid after this function
@@ -204,18 +245,22 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 
 	req->resp = resp;
 
+#ifdef DSOS_DEBUG
+	if (resp) {
+		dsos_debug("req %p req_all %p pend %d len %d ctxt %p msg %p id %ld "
+			   "type %d status %d copied to %p\n",
+			   req, req_all, req_all->num_reqs_pend,
+			   len, ctxt, req->msg, resp->u.hdr.id,
+			   resp->u.hdr.type, resp->u.hdr.status, resp);
+	} else {
+		dsos_debug("req %p req_all %p len %d ctxt %p flushed\n",
+			   req, req_all, len, ctxt);
+	}
+#endif
+
 	if (!ods_atomic_dec(&req_all->num_reqs_pend)) {
 		req_all->cb(req_all, req_all->ctxt);
 		/* Note: the callback above is responsible for the dsos_req_all_put(req_all). */
 	}
-
-#ifdef DSOS_DEBUG
-	if (resp) {
-		dsos_debug("req %p len %d ctxt %p msg %p id %ld type %d status %d copied to %p\n",
-			   req, len, ctxt, req->msg, resp, resp->u.hdr.id,
-			   resp->u.hdr.type, resp->u.hdr.status);
-	} else {
-		dsos_debug("req %p len %d ctxt %p flushed\n", req, len, ctxt);
-	}
-#endif
+	dsos_debug("done\n");
 }

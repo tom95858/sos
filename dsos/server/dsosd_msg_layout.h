@@ -1,6 +1,8 @@
 #ifndef __DSOSD_MSG_LAYOUT_H
 #define __DSOSD_MSG_LAYOUT_H
 
+#include "sos_priv.h"
+
 #pragma pack(push,1)
 
 /*
@@ -12,17 +14,22 @@
 typedef uint64_t	dsosd_handle_t;
 
 /*
- * A DSOS object id is unique within a distributed container. The top byte
- * is the server # where the object resides, and the bottom 15 bytes
- * are an id unique within the SOS container holding that object on that server.
+ * A DSOS object id is unique within a distributed container. The top
+ * uint64_t identifies the server where the object resides, and the
+ * bottom uint64_t is the ODS ref which identifies the object within
+ * its container on that server. This overlays the original (local) SOS
+ * obj id of the same size; it overloads the ODS ref part to store
+ * the server ref. The ODS ref is not needed because it is now
+ * implied from the container, and the assumption that the container in
+ * DSOS has only one partition.
  */
 typedef struct {
 	union {
 		struct {
-			uint64_t	lo;
-			uint64_t	hi;
+			uint64_t	serv;    // owning server
+			uint64_t	ods;     // ref inside the ODS
 		};
-		uint8_t		bytes[16];
+		sos_obj_ref_t	as_obj_ref;
 	};
 } dsosd_objid_t;
 
@@ -30,10 +37,15 @@ typedef struct {
 #define DSOSD_MSG_MAX_DATA	1900  // conservative len of in-line data array
 
 enum {
-	DSOSD_MSG_PING_REQ = 1999,  // 1999 is arbitrary but recognizable while debugging
+	DSOSD_MSG_INVALID = 0,        // indicates no msg for a server in a vector RPC
+	DSOSD_MSG_PING_REQ,
 	DSOSD_MSG_PING_RESP,
 	DSOSD_MSG_OBJ_CREATE_REQ,
 	DSOSD_MSG_OBJ_CREATE_RESP,
+	DSOSD_MSG_OBJ_INDEX_REQ,
+	DSOSD_MSG_OBJ_INDEX_RESP,
+	DSOSD_MSG_OBJ_FIND_REQ,
+	DSOSD_MSG_OBJ_FIND_RESP,
 	DSOSD_MSG_CONTAINER_NEW_REQ,
 	DSOSD_MSG_CONTAINER_NEW_RESP,
 	DSOSD_MSG_CONTAINER_OPEN_REQ,
@@ -193,31 +205,63 @@ typedef struct dsosd_msg_obj_create_resp {
 	dsosd_objid_t		obj_id;
 } dsosd_msg_obj_create_resp_t;
 
+typedef struct dsosd_msg_obj_index_req {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_handle_t		cont_handle;
+	dsosd_handle_t		schema_handle;
+	dsosd_objid_t		obj_id;
+	uint16_t		num_attrs;
+	uint16_t		data_len;
+	char			data[];
+} dsosd_msg_obj_index_req_t;
+
+typedef struct dsosd_msg_obj_index_resp {
+	dsosd_msg_hdr_t		hdr;
+} dsosd_msg_obj_index_resp_t;
+
+typedef struct dsosd_msg_obj_find_req {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_handle_t		cont_handle;
+	dsosd_handle_t		schema_handle;
+	uint32_t		attr_id;
+	uint32_t		data_len;
+	char			data[];
+} dsosd_msg_obj_find_req_t;
+
+typedef struct dsosd_msg_obj_find_resp {
+	dsosd_msg_hdr_t		hdr;
+	sos_obj_ref_t		obj_id;
+} dsosd_msg_obj_find_resp_t;
+
 typedef struct dsosd_msg {
 	union {
 		dsosd_msg_hdr_t				hdr;
-		dsosd_msg_ping_req_t			ping_req;
-		dsosd_msg_ping_resp_t			ping_resp;
+		dsosd_msg_container_close_req_t		container_close_req;
+		dsosd_msg_container_close_resp_t	container_close_resp;
 		dsosd_msg_container_new_req_t		container_new_req;
 		dsosd_msg_container_new_resp_t		container_new_resp;
 		dsosd_msg_container_open_req_t		container_open_req;
 		dsosd_msg_container_open_resp_t		container_open_resp;
-		dsosd_msg_container_close_req_t		container_close_req;
-		dsosd_msg_container_close_resp_t	container_close_resp;
+		dsosd_msg_obj_create_req_t		obj_create_req;
+		dsosd_msg_obj_create_resp_t		obj_create_resp;
+		dsosd_msg_obj_find_req_t		obj_find_req;
+		dsosd_msg_obj_find_resp_t		obj_find_resp;
+		dsosd_msg_obj_index_req_t		obj_index_req;
+		dsosd_msg_obj_index_resp_t		obj_index_resp;
 		dsosd_msg_part_create_req_t		part_create_req;
 		dsosd_msg_part_create_resp_t		part_create_resp;
 		dsosd_msg_part_find_req_t		part_find_req;
 		dsosd_msg_part_find_resp_t		part_find_resp;
 		dsosd_msg_part_set_state_req_t		part_set_state_req;
 		dsosd_msg_part_set_state_resp_t		part_set_state_resp;
-		dsosd_msg_schema_from_template_req_t	schema_from_template_req;
-		dsosd_msg_schema_from_template_resp_t	schema_from_template_resp;
+		dsosd_msg_ping_req_t			ping_req;
+		dsosd_msg_ping_resp_t			ping_resp;
 		dsosd_msg_schema_add_req_t		schema_add_req;
 		dsosd_msg_schema_add_resp_t		schema_add_resp;
 		dsosd_msg_schema_by_name_req_t		schema_by_name_req;
 		dsosd_msg_schema_by_name_resp_t		schema_by_name_resp;
-		dsosd_msg_obj_create_req_t		obj_create_req;
-		dsosd_msg_obj_create_resp_t		obj_create_resp;
+		dsosd_msg_schema_from_template_req_t	schema_from_template_req;
+		dsosd_msg_schema_from_template_resp_t	schema_from_template_resp;
 	} u;
 } dsosd_msg_t;
 

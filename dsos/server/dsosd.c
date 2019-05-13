@@ -175,6 +175,11 @@ static void handle_connect_req(zap_ep_t ep)
 
 static void handle_connected(zap_ep_t ep)
 {
+	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+	pthread_mutex_init(&client->idx_rbt_lock, 0);
+	rbt_init(&client->idx_rbt, idx_rbn_cmp_fn);
+
 	++g.stats.tot_num_connects;
 	++g.num_clients;
 
@@ -275,19 +280,77 @@ static void handle_write_complete(zap_ep_t ep, void *ctxt)
 {
 }
 
+static const char *msg_type_to_str(int id)
+{
+	switch (id) {
+	    case DSOSD_MSG_PING_REQ:
+		return "DSOSD_MSG_PING_REQ";
+	    case DSOSD_MSG_PING_RESP:
+		return "DSOSD_MSG_PING_RESP";
+	    case DSOSD_MSG_OBJ_CREATE_REQ:
+		return "DSOSD_OBJ_CREATE_REQ";
+	    case DSOSD_MSG_OBJ_CREATE_RESP:
+		return "DSOSD_OBJ_CREATE_RESP";
+	    case DSOSD_MSG_OBJ_INDEX_REQ:
+		return "DSOSD_OBJ_INDEX_REQ";
+	    case DSOSD_MSG_OBJ_INDEX_RESP:
+		return "DSOSD_OBJ_INDEX_RESP";
+	    case DSOSD_MSG_OBJ_FIND_REQ:
+		return "DSOSD_OBJ_FIND_REQ";
+	    case DSOSD_MSG_OBJ_FIND_RESP:
+		return "DSOSD_OBJ_FIND_RESP";
+	    case DSOSD_MSG_CONTAINER_NEW_REQ:
+		return "DSOSD_CONTAINER_NEW_REQ";
+	    case DSOSD_MSG_CONTAINER_NEW_RESP:
+		return "DSOSD_CONTAINER_NEW_RESP";
+	    case DSOSD_MSG_CONTAINER_OPEN_REQ:
+		return "DSOSD_CONTAINER_OPEN_REQ";
+	    case DSOSD_MSG_CONTAINER_OPEN_RESP:
+		return "DSOSD_CONTAINER_OPEN_RESP";
+	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
+		return "DSOSD_CONTAINER_CLOSE_REQ";
+	    case DSOSD_MSG_CONTAINER_CLOSE_RESP:
+		return "DSOSD_CONTAINER_CLOSE_RESP";
+	    case DSOSD_MSG_PART_CREATE_REQ:
+		return "DSOSD_PART_CREATE_REQ";
+	    case DSOSD_MSG_PART_CREATE_RESP:
+		return "DSOSD_PART_CREATE_RESP";
+	    case DSOSD_MSG_PART_FIND_REQ:
+		return "DSOSD_PART_FIND_REQ";
+	    case DSOSD_MSG_PART_FIND_RESP:
+		return "DSOSD_PART_FIND_RESP";
+	    case DSOSD_MSG_PART_SET_STATE_REQ:
+		return "DSOSD_PART_SET_STATE_REQ";
+	    case DSOSD_MSG_PART_SET_STATE_RESP:
+		return "DSOSD_PART_SET_STATE_RESP";
+	    case DSOSD_MSG_SCHEMA_FROM_TEMPLATE_REQ:
+		return "DSOSD_SCHEMA_FROM_TEMPLATE_REQ";
+	    case DSOSD_MSG_SCHEMA_FROM_TEMPLATE_RESP:
+		return "DSOSD_SCHEMA_FROM_TEMPLATE_RESP";
+	    case DSOSD_MSG_SCHEMA_ADD_REQ:
+		return "DSOSD_SCHEMA_ADD_REQ";
+	    case DSOSD_MSG_SCHEMA_ADD_RESP:
+		return "DSOSD_SCHEMA_ADD_RESP";
+	    case DSOSD_MSG_SCHEMA_BY_NAME_REQ:
+		return "DSOSD_SCHEMA_BY_NAME_REQ";
+	    case DSOSD_MSG_SCHEMA_BY_NAME_RESP:
+		return "DSOSD_SCHEMA_BY_NAME_RESP";
+	    default:
+		return "<invalid>";
+	}
+}
+
 static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 {
 	++g.stats.tot_num_reqs;
 
-	dsosd_debug("ep %p msg %p type %d id %ld len %d\n",
-		    ep, msg, msg->u.hdr.type, msg->u.hdr.id, len);
+	dsosd_debug("ep %p %s msg %p type %d id %ld len %d\n",
+		    ep, msg_type_to_str(msg->u.hdr.type), msg,
+		    msg->u.hdr.type, msg->u.hdr.id, len);
 
 	switch (msg->u.hdr.type) {
 	    case DSOSD_MSG_PING_REQ:
 		rpc_handle_ping(ep, (dsosd_msg_ping_req_t *)msg, len);
-		break;
-	    case DSOSD_MSG_OBJ_CREATE_REQ:
-		rpc_handle_obj_create(ep, (dsosd_msg_obj_create_req_t *)msg, len);
 		break;
 	    case DSOSD_MSG_CONTAINER_NEW_REQ:
 		rpc_handle_container_new(ep, (dsosd_msg_container_new_req_t *)msg, len);
@@ -297,6 +360,15 @@ static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 		break;
 	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
 		rpc_handle_container_close(ep, (dsosd_msg_container_close_req_t *)msg, len);
+		break;
+	    case DSOSD_MSG_OBJ_CREATE_REQ:
+		rpc_handle_obj_create(ep, (dsosd_msg_obj_create_req_t *)msg, len);
+		break;
+	    case DSOSD_MSG_OBJ_INDEX_REQ:
+		rpc_handle_obj_index(ep, (dsosd_msg_obj_index_req_t *)msg, len);
+		break;
+	    case DSOSD_MSG_OBJ_FIND_REQ:
+		rpc_handle_obj_find(ep, (dsosd_msg_obj_find_req_t *)msg, len);
 		break;
 	    case DSOSD_MSG_PART_CREATE_REQ:
 		rpc_handle_part_create(ep, (dsosd_msg_part_create_req_t *)msg, len);
@@ -412,4 +484,9 @@ void dsosd_req_put(dsosd_req_t *req)
 		free(req->resp);
 		free(req);
 	}
+}
+
+int idx_rbn_cmp_fn(void *tree_key, void *key)
+{
+	return strcmp(tree_key, key);
 }

@@ -53,16 +53,23 @@ extern struct globals_s g;
  * into DSOS and lives throughout the request's lifetime to track its
  * state.
  */
+enum {
+	REQ_VECTOR_MEMBER  = 0x00000001,
+	REQ_RESPONSE_RECVD = 0x00000002,
+};
 typedef void (*dsos_req_cb_t)(dsos_req_t *, size_t, void *);  // response callback fn
 typedef struct dsos_req_s {
 	ods_atomic_t		refcount;
+	uint32_t		flags;
 	uint64_t		id;            // unique id for the request
 	dsosd_msg_t		*msg;          // req msg sent to server
 	dsosd_msg_t		*resp;         // its response
 	size_t			msg_len_max;   // max size of msg (for send)
+	size_t			msg_len;       // actual size of msg
 	size_t			resp_len;      // actual size of resp (for response)
 	dsos_req_cb_t		cb;            // response callback
 	void			*ctxt;         // for callbacks
+	sem_t			sem;           // for signaling the response
 	dsos_conn_t		*conn;         // server connection object
 	LIST_ENTRY(dsos_req_s)	entry;         // for dsosd_req_all_t's list
 } dsos_req_t;
@@ -73,13 +80,13 @@ typedef struct dsos_req_s {
 typedef void (*dsos_req_all_cb_t)(dsos_req_all_t *, void *);  // response callback fn
 typedef struct dsos_req_all_s {
 	ods_atomic_t		refcount;
-	dsosd_msg_t		*msg;          // req msg sent to all servers
+	dsosd_msg_t		*msg;          // req msg, when same msg is sent to all
 	size_t			msg_len_max;   // max size of msg (for send)
 	dsos_req_all_cb_t	cb;            // response callback
 	void			*ctxt;         // for callbacks
 	ods_atomic_t		num_reqs_pend; // # reqs still pending
+	int			num_servers;   // # reqs in reqs[]
 	dsos_req_t		**reqs;        // all the reqs, one per server
-	dsos_conn_t		*conn;         // server connection object
 	sem_t			sem;           // for signaling the response
 } dsos_req_all_t;
 
@@ -112,23 +119,26 @@ typedef struct dsos_part_s {
 typedef struct dsos_schema_s {
 	dsos_t		*cont;                // container
 	dsosd_handle_t	*handles;             // vector of server handles
-	sos_schema_t	schema;               // local SOS schema handle
+	sos_schema_t	sos_schema;           // local SOS schema handle
 } dsos_schema_t;
 
 /*
  * DSOS object.
  */
 typedef enum {
-	DSOS_OBJ_INLINE = 0x00000001,
+	DSOS_OBJ_INLINE  = 0x00000001,
+	DSOS_OBJ_CREATED = 0x00000002
 } dsos_obj_type_t;
 typedef void (*dsos_obj_cb_t)(dsos_obj_t *, void *);
 typedef struct dsos_obj_s {
 	dsos_obj_type_t		flags;
 	sos_obj_t		sos_obj;       // the actual SOS object
 	dsos_schema_t		*schema;
+	dsosd_objid_t		obj_id;        // global object id, valid once the resp comes in
 	// The following field is temporary until SOS can alloc objs from our shared heap.
 	char			*buf;          // pointer to data (shared heap or a send buffer)
 	dsos_req_t		*req;          // server req to create this obj
+	dsos_req_all_t		*req_all;      // server req(s) to index this obj
 	dsos_obj_cb_t		cb;            // response callback
 	void			*ctxt;         // for callbacks
 } dsos_obj_t;
@@ -255,6 +265,28 @@ typedef struct {
 int	dsos_rpc_part_find(rpc_part_find_in_t  *args_inp,
 			   rpc_part_find_out_t *args_outp);
 
+// This RPC is asynchronous, so the results came back via a callback.
+typedef struct {
+	int		server_num;
+	dsos_obj_t	*obj;
+	int		num_attrs;
+	sos_value_t	*attrs;
+} rpc_obj_index_in_t;
+int	dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp);
+
+typedef struct {
+	int		server_num;
+	dsosd_handle_t	cont_handle;
+	dsosd_handle_t	schema_handle;
+	sos_attr_t	attr;
+	sos_key_t	key;
+} rpc_obj_find_in_t;
+typedef struct {
+	sos_obj_ref_t	obj_id;
+} rpc_obj_find_out_t;
+int	dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp,
+			  rpc_obj_find_out_t *args_outp);
+
 /* Internal API. */
 int		dsos_config_read(const char *config_file);
 int		dsos_connect(const char *host, const char *service, int server_id);
@@ -263,6 +295,7 @@ void		dsos_err_clear(void);
 void		dsos_err_set(int server_id, int status);
 int		*dsos_err_get(void);
 int		dsos_err_status(void);
+const char	*dsos_msg_type_to_str(int id);
 dsos_req_t	*dsos_req_find(dsosd_msg_t *resp);
 void		dsos_req_get(dsos_req_t *req);
 void		dsos_req_init(void);
@@ -272,8 +305,10 @@ int		dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len);
 dsos_req_all_t	*dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt);
 void		dsos_req_all_put(dsos_req_all_t *req_all);
 int		dsos_req_all_submit(dsos_req_all_t *req_all, size_t len);
-void *dsos_rpc_serialize_schema_template(sos_schema_template_t templ, void *buf, size_t *psz);
+void		*dsos_rpc_serialize_schema_template(sos_schema_template_t templ, void *buf,
+						    size_t *psz);
 sos_schema_template_t dsos_rpc_deserialize_schema_template(char *buf, size_t len);
+void		*dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz);
 
 /* Public API. */
 int		dsos_container_close(dsos_t *dsos);
@@ -282,6 +317,9 @@ void		dsos_disconnect(void);
 int		dsos_init(const char *config_filename);
 dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_obj_create(dsos_obj_t *obj);
+int		dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key,
+			      sos_obj_ref_t *pref);
+int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
 dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
 
 #define dsos_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
