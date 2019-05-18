@@ -1328,6 +1328,16 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 	return NULL;
 }
 
+static sos_alloc_t __alloc_fn = malloc;
+static sos_free_t __free_fn = free;
+
+void sos_obj_allocator_set(sos_alloc_t alloc_fn, sos_free_t free_fn)
+{
+	__alloc_fn = alloc_fn;
+	__free_fn = free_fn;
+	ods_obj_allocator_set(alloc_fn, free_fn);
+}
+
 /**
  * \brief Allocate a SOS object in memory
  *
