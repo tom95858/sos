@@ -344,6 +344,10 @@ extern ods_obj_t _ods_obj_alloc_extend(ods_t ods, size_t sz, size_t extend_sz,
  * \return	Pointer to an object of the requested size or NULL if there
  *		is an error.
  */
+typedef void* (*ods_alloc_t)(size_t sz);
+typedef void (*ods_free_t)(void *ptr);
+void ods_obj_allocator_set(ods_alloc_t alloc_fn, ods_free_t free_fn);
+
 extern ods_obj_t _ods_obj_malloc(size_t sz, const char *func, int line);
 #define ods_obj_malloc(sz) _ods_obj_malloc(sz, __func__, __LINE__)
 

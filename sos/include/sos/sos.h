@@ -481,8 +481,12 @@ int sos_part_obj_iter(sos_part_t part, sos_part_obj_iter_pos_t pos,
 #define SOS_OBJ_BE	1
 #define SOS_OBJ_LE	2
 
+typedef void *(*sos_alloc_t)(size_t sz);
+typedef void (*sos_free_t)(void *ptr);
+
 sos_obj_t sos_obj_new(sos_schema_t schema);
 sos_obj_t sos_obj_malloc(sos_schema_t schema);
+void sos_obj_allocator_set(sos_alloc_t alloc_fn, sos_free_t free_fn);
 sos_schema_t sos_obj_schema(sos_obj_t obj);
 int sos_obj_copy(sos_obj_t dst, sos_obj_t src);
 sos_obj_ref_t sos_obj_ref(sos_obj_t obj);

@@ -91,6 +91,8 @@ static void __lock_init(ods_lock_t *lock);
 static void __ods_lock(ods_t ods);
 static void __ods_unlock(ods_t ods);
 static inline void map_put(ods_map_t map);
+static ods_alloc_t __alloc_fn = malloc;
+static ods_free_t __free_fn = free;
 
 #if defined(ODS_DEBUG)
 int __ods_debug = 1;
@@ -938,7 +940,7 @@ void __ods_obj_put(ods_obj_t obj, int lock)
 	if (obj && !ods_atomic_dec(&obj->refcount)) {
 		if (!obj->ods) {
 			/* This is a memory object */
-			free(obj);
+			__free_fn(obj);
 			return;
 		}
 		assert(obj->refcount == 0);
@@ -1739,10 +1741,16 @@ ods_obj_t _ods_obj_alloc_extend(ods_t ods, size_t sz, size_t extend_sz, const ch
 	return obj;
 }
 
+void ods_obj_allocator_set(ods_alloc_t alloc_fn, ods_free_t free_fn)
+{
+	__alloc_fn = alloc_fn;
+	__free_fn = free_fn;
+}
+
 ods_obj_t _ods_obj_malloc(size_t sz, const char *func, int line)
 {
 	ods_obj_t obj;
-	obj = malloc(sz + sizeof(struct ods_obj_s));
+	obj = __alloc_fn(sz + sizeof(struct ods_obj_s));
 	if (!obj)
 		return NULL;
 	obj->ods = NULL;
