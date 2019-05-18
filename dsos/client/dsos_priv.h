@@ -53,6 +53,7 @@ extern struct globals_s g;
  * into DSOS and lives throughout the request's lifetime to track its
  * state.
  */
+extern int *REQ_ALL_SERVERS;  // for vector req's
 enum {
 	REQ_VECTOR_MEMBER  = 0x00000001,
 	REQ_RESPONSE_RECVD = 0x00000002,
@@ -80,7 +81,6 @@ typedef struct dsos_req_s {
 typedef void (*dsos_req_all_cb_t)(dsos_req_all_t *, void *);  // response callback fn
 typedef struct dsos_req_all_s {
 	ods_atomic_t		refcount;
-	dsosd_msg_t		*msg;          // req msg, when same msg is sent to all
 	size_t			msg_len_max;   // max size of msg (for send)
 	dsos_req_all_cb_t	cb;            // response callback
 	void			*ctxt;         // for callbacks
@@ -121,6 +121,29 @@ typedef struct dsos_schema_s {
 	dsosd_handle_t	*handles;             // vector of server handles
 	sos_schema_t	sos_schema;           // local SOS schema handle
 } dsos_schema_t;
+
+/*
+ * DSOS iteration object.
+ */
+struct iter_rbn {
+	struct rbn	rbn;
+	int		server_num;
+};
+typedef struct dsos_iter_s {
+	dsos_schema_t	*schema;
+	sos_attr_t	attr;                 // attr this is iterating over
+	dsosd_handle_t	*handles;             // vector of server sos_iter_t handles
+	int		done;                 // =1 when all servers are done w/the iteration
+	int		last_op;              // last iter op (begin,end,prev,next)
+	int		last_srvr;            // server from which the last obj was returned
+	size_t		obj_sz;               // object size this iterates over
+	sos_obj_t	*sos_objs;            // vector of recvd objs
+	struct rbt	rbt;                  // for finding min key value of recvd objs
+#if 1
+	// The following will go away once sos_obj_malloc() allocs mapped mem.
+	void		**rma_bufs;           // mapped mem for rma; temporary for now
+#endif
+} dsos_iter_t;
 
 /*
  * DSOS object.
@@ -280,12 +303,70 @@ typedef struct {
 	dsosd_handle_t	schema_handle;
 	sos_attr_t	attr;
 	sos_key_t	key;
+	uint64_t	va;
+	uint32_t	len;
 } rpc_obj_find_in_t;
 typedef struct {
 	sos_obj_ref_t	obj_id;
+	int		obj_sz;
 } rpc_obj_find_out_t;
-int	dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp,
+int	dsos_rpc_obj_find(rpc_obj_find_in_t  *args_inp,
 			  rpc_obj_find_out_t *args_outp);
+
+typedef struct {
+	dsosd_handle_t	cont_handle;
+	sos_obj_ref_t	obj_id;
+	uint64_t	va;
+	uint32_t	len;
+} rpc_obj_get_in_t;
+typedef struct {
+	int		obj_sz;
+} rpc_obj_get_out_t;
+int	dsos_rpc_obj_get(rpc_obj_get_in_t  *args_inp,
+			 rpc_obj_get_out_t *args_outp);
+
+typedef struct {
+	dsosd_handle_t	*schema_handles;
+	sos_attr_t	attr;
+} rpc_iter_new_in_t;
+typedef struct {
+	dsosd_handle_t	*handles;
+} rpc_iter_new_out_t;
+int	dsos_rpc_iter_new(rpc_iter_new_in_t  *args_inp,
+			  rpc_iter_new_out_t *args_outp);
+
+typedef struct {
+	dsosd_handle_t	*iter_handles;
+} rpc_iter_close_in_t;
+typedef struct {
+} rpc_iter_close_out_t;
+int	dsos_rpc_iter_close(rpc_iter_close_in_t  *args_inp,
+			    rpc_iter_close_out_t *args_outp);
+
+typedef struct {
+	dsosd_handle_t	iter_handle;
+	int		op;
+	void		*va;
+	size_t		obj_sz;
+	int		server_num;
+} rpc_iter_step_one_in_t;
+typedef struct {
+	int		found;
+} rpc_iter_step_one_out_t;
+int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
+			       rpc_iter_step_one_out_t *args_outp);
+
+typedef struct {
+	dsosd_handle_t	*iter_handles;
+	int		op;
+	void		**vas;
+	size_t		obj_sz;
+} rpc_iter_step_all_in_t;
+typedef struct {
+	int		*found;
+} rpc_iter_step_all_out_t;
+int	dsos_rpc_iter_step_all(rpc_iter_step_all_in_t  *args_inp,
+			       rpc_iter_step_all_out_t *args_outp);
 
 /* Internal API. */
 int		dsos_config_read(const char *config_file);
@@ -302,6 +383,8 @@ void		dsos_req_init(void);
 dsos_req_t	*dsos_req_new(dsos_req_cb_t cb, void *ctxt);
 void		dsos_req_put(dsos_req_t *req);
 int		dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len);
+dsos_req_t	*dsos_req_all_add_server(dsos_req_all_t *req_all, int server_num);
+dsos_req_all_t	*dsos_req_all_sparse_new(dsos_req_all_cb_t cb, void *ctxt);
 dsos_req_all_t	*dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt);
 void		dsos_req_all_put(dsos_req_all_t *req_all);
 int		dsos_req_all_submit(dsos_req_all_t *req_all, size_t len);
@@ -315,10 +398,13 @@ int		dsos_container_close(dsos_t *dsos);
 dsos_t		*dsos_container_open(const char *path, sos_perm_t perms);
 void		dsos_disconnect(void);
 int		dsos_init(const char *config_filename);
+sos_obj_t	dsos_iter_begin(dsos_iter_t *iter);
+int		dsos_iter_close(dsos_iter_t *iter);
+dsos_iter_t	*dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr);
+sos_obj_t	dsos_iter_next(dsos_iter_t *iter);
 dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_obj_create(dsos_obj_t *obj);
-int		dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key,
-			      sos_obj_ref_t *pref);
+sos_obj_t	dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key);
 int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
 dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
 

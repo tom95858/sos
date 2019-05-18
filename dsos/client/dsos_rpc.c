@@ -412,7 +412,7 @@ int dsos_rpc_part_set_state(rpc_part_set_state_in_t  *args_inp,
 }
 
 // This call is asynchronous.
-int dsos_rpc_object_create(rpc_object_create_in_t  *args_inp)
+int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 {
 	int				server_id;
 	char				*obj_data;
@@ -436,7 +436,7 @@ int dsos_rpc_object_create(rpc_object_create_in_t  *args_inp)
 	 */
 	msg = (dsosd_msg_obj_create_req_t *)obj->req->msg;
 	msg->hdr.type      = DSOSD_MSG_OBJ_CREATE_REQ;
-	msg->len           = obj_sz;
+	msg->hdr2.obj_sz   = obj_sz;
 	msg->schema_handle = obj->schema->handles[server_id];
 
 	req_len = sizeof(dsosd_msg_obj_create_req_t);
@@ -630,7 +630,7 @@ int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
 {
 	int				i, j;
 	size_t				len;
-	char				*buf;
+	char				*buf, *p;
 	dsos_req_all_t			*req_all;
 	dsosd_msg_obj_index_req_t	*msg;
 	sos_value_t			v;
@@ -638,7 +638,7 @@ int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
 
 	obj = args_inp[0].obj;
 
-	req_all = dsos_req_all_new(index_obj_cb, obj);
+	req_all = dsos_req_all_sparse_new(index_obj_cb, obj);
 
 	/*
 	 * Copy in args to the request messages. Not every server
@@ -646,11 +646,10 @@ int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
 	 * is 0 (there is nothing to send).
 	 */
 	for (i = 0; i < g.num_servers; ++i) {
+		if (args_inp[i].num_attrs == 0)
+			continue;  // no RPC for this server
+		dsos_req_all_add_server(req_all, i);
 		msg = (dsosd_msg_obj_index_req_t *)req_all->reqs[i]->msg;
-		if (args_inp[i].num_attrs == 0) {
-			msg->hdr.type = DSOSD_MSG_INVALID;  // no RPC for this server
-			continue;
-		}
 		msg->hdr.type      = DSOSD_MSG_OBJ_INDEX_REQ;
 		msg->hdr.flags     = 0;
 		msg->hdr.status    = 0;
@@ -665,12 +664,19 @@ int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
 		for (j = 0; j < args_inp[i].num_attrs; ++j) {
 			v = args_inp[i].attrs[j];
 			serialize_uint32(sos_attr_id(v->attr), &buf, &len);
+			p = buf;
 			if (!dsos_rpc_serialize_attr_value(v, &buf, &len)) {
 				dsos_error("attr sz %d too big\n", sos_value_size(v));
 				sos_value_put(v);
 				sos_value_free(v);
 				return E2BIG;
 			}
+#if 0
+			printf("Bo: attr_id %d: ", sos_attr_id(v->attr));
+			for (; p < buf; ++p) printf(" %02x", *p & 0xff);
+			printf("\n");
+			fflush(stdout);
+#endif
 			sos_value_put(v);
 			sos_value_free(v);
 		}
@@ -689,7 +695,7 @@ int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp
 	void				*key_data;
 	size_t				key_sz;
 	size_t				buf_len;
-	char				*buf;
+	char				*buf, *p;
 	dsos_req_t			*req;
 	dsosd_msg_obj_find_req_t	*msg;
 
@@ -704,6 +710,8 @@ int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp
 	msg->cont_handle   = args_inp->cont_handle;
 	msg->schema_handle = args_inp->schema_handle;
 	msg->attr_id       = sos_attr_id(args_inp->attr);
+	msg->hdr2.obj_va   = args_inp->va;
+	msg->hdr2.obj_sz   = args_inp->len;
 
 	key_sz   = sos_key_len(args_inp->key);
 	key_data = sos_key_value(args_inp->key);
@@ -732,8 +740,199 @@ int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp
 		dsos_debug("status %d\n", req->resp->u.hdr.status);
 		return req->resp->u.hdr.status;
 	}
-	args_outp->obj_id = req->resp->u.obj_find_resp.obj_id;
+	args_outp->obj_id = req->resp->u.obj_find_resp.obj_id.as_obj_ref;
 	dsos_debug("obj_id %08lx%08lx\n", args_outp->obj_id.ref.ods, args_outp->obj_id.ref.obj);
+
+	return 0;
+}
+
+int dsos_rpc_obj_get(rpc_obj_get_in_t *args_inp, rpc_obj_get_out_t *args_outp)
+{
+	int			ret, server_num;
+	dsos_req_t		*req;
+	dsosd_msg_obj_get_req_t	*msg;
+
+	req = dsos_req_new(rpc_signal_cb, NULL);
+	if (!req)
+		return ENOMEM;
+
+	msg = (dsosd_msg_obj_get_req_t *)req->msg;
+	msg->hdr.type          = DSOSD_MSG_OBJ_GET_REQ;
+	msg->hdr.flags         = 0;
+	msg->hdr.status        = 0;
+	msg->cont_handle       = args_inp->cont_handle;
+	msg->obj_id.as_obj_ref = args_inp->obj_id;
+	msg->hdr2.obj_va       = args_inp->va;
+	msg->hdr2.obj_sz       = args_inp->len;
+
+	ret = dsos_req_submit(req, &g.conns[msg->obj_id.serv],
+			      sizeof(dsosd_msg_obj_get_req_t));
+	if (ret) {
+		dsos_error("ret %d\n", ret);
+		return ret;
+	}
+
+	sem_wait(&req->sem);
+
+	/* Copy out results from the response. */
+	if (req->resp->u.hdr.status) {
+		dsos_debug("status %d\n", req->resp->u.hdr.status);
+		return req->resp->u.hdr.status;
+	}
+	args_outp->obj_sz = req->resp->u.hdr2.obj_sz;
+
+	if (req->resp->u.hdr.flags & DSOSD_MSG_IMM)
+		memcpy((void *)args_inp->va, req->resp->u.obj_get_resp.data, args_outp->obj_sz);
+
+	dsos_debug("obj_id %08lx%08lx flags %x va %p sz %d\n",
+		   args_inp->obj_id.ref.ods, args_inp->obj_id.ref.obj,
+		   req->resp->u.hdr.flags, args_inp->va, args_outp->obj_sz);
+
+	return 0;
+}
+
+int dsos_rpc_iter_new(rpc_iter_new_in_t *args_inp, rpc_iter_new_out_t *args_outp)
+{
+	int				i, ret;
+	dsos_req_all_t			*req_all;
+	dsosd_msg_iterator_new_req_t	*msg;
+	dsosd_msg_iterator_new_resp_t	*resp;
+
+	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+
+	/* Copy in args to the request messages. */
+	for (i = 0; i < g.num_servers; ++i) {
+		msg = (dsosd_msg_iterator_new_req_t *)req_all->reqs[i]->msg;
+		msg->hdr.type      = DSOSD_MSG_ITERATOR_NEW_REQ;
+		msg->schema_handle = args_inp->schema_handles[i];
+		msg->attr_id       = sos_attr_id(args_inp->attr);
+	}
+
+	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_new_req_t));
+	if (ret)
+		return ret;
+
+	sem_wait(&req_all->sem);
+
+	/* Copy out results from the responses. Caller must free. */
+	args_outp->handles = (dsosd_handle_t *)malloc(sizeof(dsosd_handle_t) * g.num_servers);
+	if (!args_outp->handles)
+		dsos_fatal("out of memory\n");
+	dsos_err_clear();
+	for (i = 0; i < g.num_servers; ++i) {
+		resp = (dsosd_msg_iterator_new_resp_t *)req_all->reqs[i]->resp;
+		args_outp->handles[i] = resp->iter_handle;
+		dsos_err_set(i, resp->hdr.status);
+	}
+
+	dsos_req_all_put(req_all);
+	return dsos_err_status();
+}
+
+int dsos_rpc_iter_close(rpc_iter_close_in_t *args_inp, rpc_iter_close_out_t *args_outp)
+{
+	int				i, ret;
+	dsos_req_all_t			*req_all;
+	dsosd_msg_iterator_close_req_t	*msg;
+	dsosd_msg_iterator_close_resp_t	*resp;
+
+	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+
+	/* Copy in args to the request messages. */
+	for (i = 0; i < g.num_servers; ++i) {
+		msg = (dsosd_msg_iterator_close_req_t *)req_all->reqs[i]->msg;
+		msg->hdr.type    = DSOSD_MSG_ITERATOR_CLOSE_REQ;
+		msg->iter_handle = args_inp->iter_handles[i];
+	}
+
+	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_close_req_t));
+	if (ret)
+		return ret;
+
+	sem_wait(&req_all->sem);
+
+	/* Copy out results from the responses. */
+	dsos_err_clear();
+	for (i = 0; i < g.num_servers; ++i) {
+		resp = (dsosd_msg_iterator_close_resp_t *)req_all->reqs[i]->resp;
+		dsos_err_set(i, resp->hdr.status);
+	}
+
+	dsos_req_all_put(req_all);
+	return dsos_err_status();
+}
+
+int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_out_t *args_outp)
+{
+	int				i, ret;
+	dsos_req_all_t			*req_all;
+	dsosd_msg_iterator_step_req_t	*msg;
+	dsosd_msg_iterator_step_resp_t	*resp;
+
+	dsos_debug("op %d\n", args_inp->op);
+
+	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+
+	/* Copy in args to the request messages. */
+	for (i = 0; i < g.num_servers; ++i) {
+		msg = (dsosd_msg_iterator_step_req_t *)req_all->reqs[i]->msg;
+		msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
+		msg->op          = args_inp->op;
+		msg->iter_handle = args_inp->iter_handles[i];
+		msg->hdr2.obj_va = (uint64_t)args_inp->vas[i];
+		msg->hdr2.obj_sz = args_inp->obj_sz;
+	}
+
+	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_step_req_t));
+	if (ret)
+		return ret;
+
+	sem_wait(&req_all->sem);
+
+	/* Copy out statuses. No data to copy out. */
+	args_outp->found = (int *)calloc(g.num_servers, sizeof(int));
+	if (!args_outp->found)
+		return ENOMEM;
+	dsos_err_clear();
+	for (i = 0; i < g.num_servers; ++i) {
+		resp = (dsosd_msg_iterator_step_resp_t *)req_all->reqs[i]->resp;
+		if (resp->hdr.status == 0) {
+			args_outp->found[i] = 1;
+			dsos_debug("obj from server %d\n", i);
+		}
+		else if (resp->hdr.status != ENOENT)
+			dsos_err_set(i, resp->hdr.status);
+	}
+
+	dsos_req_all_put(req_all);
+	return dsos_err_status();
+}
+
+int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_out_t *args_outp)
+{
+	int				ret;
+	dsos_req_t			*req;
+	dsosd_msg_iterator_step_req_t	*msg;
+	dsosd_msg_iterator_step_resp_t	*resp;
+
+	req = dsos_req_new(rpc_signal_cb, NULL);
+
+	/* Copy in args to the request message. */
+	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
+	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
+	msg->op          = args_inp->op;
+	msg->iter_handle = args_inp->iter_handle;
+	msg->hdr2.obj_va = (uint64_t)args_inp->va;
+	msg->hdr2.obj_sz = args_inp->obj_sz;
+
+	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
+	if (ret)
+		return ret;
+
+	sem_wait(&req->sem);
+
+	/* Copy out status. No data to copy out. */
+	args_outp->found = (req->resp->u.hdr.status == 0);
 
 	return 0;
 }

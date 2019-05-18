@@ -71,13 +71,13 @@ int dsos_obj_create(dsos_obj_t *obj)
 		obj->buf = mm_alloc(g.heap, obj_sz);
 		if (!obj->buf)
 			return ENOMEM;
-		msg->va = (uint64_t)obj->buf;
+		msg->hdr2.obj_va = (uint64_t)obj->buf;
 	} else {
 		// alloc in-line (within the send buffer)
 		msg->hdr.flags |= DSOSD_MSG_IMM;
 		obj->flags |= DSOS_OBJ_INLINE;
 		obj->buf = msg->data;
-		msg->va = 0;
+		msg->hdr2.obj_va = 0;
 	}
 
 	memcpy(obj->buf, obj_data, obj_sz);

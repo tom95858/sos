@@ -4,7 +4,7 @@ if ENABLE_DEBUG
 AM_CFLAGS += -DDSOSD_DEBUG
 endif
 
-dsosd_SOURCES = dsosd.c dsosd_rpc.c
+dsosd_SOURCES = dsosd.c dsosd_req.c dsosd_rpc.c
 dsosd_CFLAGS  = $(AM_CFLAGS)         \
 	-I$(top_srcdir)/dsos/include \
 	-I$(top_srcdir)/sos/src      \

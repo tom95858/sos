@@ -236,14 +236,17 @@ int dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt)
 	return ret;
 }
 
-int dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key, sos_obj_ref_t *pref)
+sos_obj_t dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key)
 {
 	int			ret, server_num;
-	size_t			key_sz;
-	void			*key_data;
+	size_t			key_sz, obj_sz;
+	char			*key_data, *obj_data, *rma_buf;
+	sos_obj_t		sos_obj;
 	uint8_t			sha[SHA256_DIGEST_LENGTH];
-	rpc_obj_find_in_t	args_in;
-	rpc_obj_find_out_t	args_out;
+	rpc_obj_find_in_t	args_in_find;
+	rpc_obj_find_out_t	args_out_find;
+	rpc_obj_get_in_t	args_in_get;
+	rpc_obj_get_out_t	args_out_get;
 
 	key_sz   = sos_key_len(key);
 	key_data = sos_key_value(key);
@@ -251,17 +254,270 @@ int dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key, sos_obj
 	SHA256((const unsigned char *)key_data, key_sz, sha);
 	server_num = sha[0] % g.num_servers;
 
-	args_in.server_num    = server_num;
-	args_in.cont_handle   = schema->cont->handles[server_num];
-	args_in.schema_handle = schema->handles[server_num];
-	args_in.attr          = attr;
-	args_in.key           = key;
+	sos_obj = sos_obj_malloc(schema->sos_schema);
+	if (!sos_obj) {
+		dsos_error("could not allocate sos_obj\n");
+		return NULL;
+	}
+	sos_obj_data_get(sos_obj, &obj_data, &obj_sz);
+#if 1
+	/*
+	 * Until SOS can alloc objects from mapped memory, allocate
+	 * from our shared heap and have the server RMA into that,
+	 * then copy it to the actual SOS object.
+	 */
+	rma_buf = mm_alloc(g.heap, obj_sz);
+	if (!rma_buf) {
+		sos_obj_put(sos_obj);
+		dsos_error("could not allocate rma_buf\n");
+		return NULL;
+	}
+#endif
+	args_in_find.server_num    = server_num;
+	args_in_find.cont_handle   = schema->cont->handles[server_num];
+	args_in_find.schema_handle = schema->handles[server_num];
+	args_in_find.attr          = attr;
+	args_in_find.key           = key;
+	args_in_find.va            = (uint64_t)rma_buf; // XXX (see above comment)
+	args_in_find.len           = obj_sz;  // size of rma_buf
 
-	ret = dsos_rpc_obj_find(&args_in, &args_out);
+	ret = dsos_rpc_obj_find(&args_in_find, &args_out_find);
 	if (ret)
-		return ret;
+		return NULL;
 
-	if (pref) *pref = args_out.obj_id;
+	dsos_debug("obj_id %08lx%08lx\n",
+		   args_out_find.obj_id.ref.ods, args_out_find.obj_id.ref.obj);
 
-	return 0;
+	// XXX Bo: optimize case where the server owning the index also owns the obj.
+
+	args_in_get.cont_handle = schema->cont->handles[args_out_find.obj_id.ref.ods];
+	args_in_get.obj_id      = args_out_find.obj_id;
+	args_in_get.va          = (uint64_t)rma_buf; // XXX (see above comment)
+	args_in_get.len         = obj_sz;  // size of rma_buf
+
+	ret = dsos_rpc_obj_get(&args_in_get, &args_out_get);
+	if (ret)
+		return NULL;
+
+	dsos_debug("obj_id %08lx%08lx sos_obj %p\n",
+		   args_out_find.obj_id.ref.ods, args_out_find.obj_id.ref.obj, sos_obj);
+#if 1
+	// XXX remove me eventually. see comment in the above #if block.
+	memcpy(obj_data, rma_buf, args_out_get.obj_sz);
+	mm_free(g.heap, rma_buf);
+#endif
+
+	return sos_obj;
+}
+
+static int iter_rbn_cmp_fn(void *tree_key, void *key)
+{
+	sos_value_t v1 = (sos_value_t)tree_key;
+	sos_value_t v2 = (sos_value_t)tree_key;
+	int ret = sos_value_cmp(v1,v2);
+
+	dsos_debug("v1 %ld v2 %ld cmp %d\n",
+		   v1->data->prim.uint64_, v2->data->prim.uint64_, ret);
+
+	return sos_value_cmp((sos_value_t)tree_key, (sos_value_t)key);
+}
+
+static void iter_rbt_insert(dsos_iter_t *iter, sos_value_t v, int server_num)
+{
+	struct iter_rbn	*rbn = calloc(1, sizeof(struct iter_rbn));
+	if (!rbn)
+		dsos_fatal("out of memory");
+	rbn->rbn.key    = (void *)v;
+	rbn->server_num = server_num;
+
+	rbt_ins(&iter->rbt, (void *)rbn);
+
+	dsos_debug("iter %p inserted value %ld\n", iter, v->data->prim.uint64_);
+}
+
+static int iter_rbt_min(dsos_iter_t *iter)
+{
+	int		ret = -1;
+	struct iter_rbn	*rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
+	if (rbn) {
+		ret = rbn->server_num;
+		rbt_del(&iter->rbt, (struct rbn *)rbn);
+		sos_value_put(rbn->rbn.key);
+		sos_value_free(rbn->rbn.key);
+		free(rbn);
+	}
+	dsos_debug("iter %p server_num %d\n", iter, ret);
+	return ret;
+}
+
+static void iter_insert_obj(dsos_iter_t *iter, int server_num)
+{
+	iter_rbt_insert(iter,
+			sos_value(iter->sos_objs[server_num], iter->attr),
+			server_num);
+}
+
+static sos_obj_t iter_remove_min(dsos_iter_t *iter)
+{
+	int		server_num;
+	sos_obj_t	sos_obj;
+
+	server_num = iter_rbt_min(iter);
+	if (server_num == -1) {
+		iter->done = 1;
+		return NULL;
+	}
+	sos_obj = iter->sos_objs[server_num];
+	iter->sos_objs[server_num] = NULL;
+	iter->last_srvr = server_num;
+
+	return sos_obj;
+}
+
+dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
+{
+	int			i, ret;
+	dsos_iter_t		*iter;
+	rpc_iter_new_in_t	args_in;
+	rpc_iter_new_out_t	args_out;
+
+	args_in.schema_handles = schema->handles;
+	args_in.attr = attr;
+
+	ret = dsos_rpc_iter_new(&args_in, &args_out);
+	if (ret)
+		return NULL;
+
+	iter = (dsos_iter_t *)malloc(sizeof(dsos_iter_t));
+	if (!iter)
+		dsos_fatal("out of memory\n");
+	iter->handles   = args_out.handles;
+	iter->attr      = attr;
+	iter->schema    = schema;
+	iter->last_op   = DSOSD_MSG_ITER_OP_NONE;
+	iter->done      = 0;
+	iter->last_srvr = -1;
+	iter->obj_sz    = schema->sos_schema->data->obj_sz + schema->sos_schema->data->array_data_sz;
+	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
+	iter->sos_objs = calloc(g.num_servers, sizeof(sos_obj_t));
+	if (!iter->sos_objs)
+		return NULL;
+	iter->rma_bufs = (void **)malloc(g.num_servers * sizeof(char *));
+	if (!iter->rma_bufs)
+		return NULL;
+#if 1
+	/*
+	 * Until SOS can alloc objects from mapped memory, allocate
+	 * from our shared heap and have the server RMA into that,
+	 * then copy it to the actual SOS object.
+	 */
+	for (i = 0; i < g.num_servers; ++i) {
+		iter->rma_bufs[i] = mm_alloc(g.heap, iter->obj_sz);
+		if (!iter->rma_bufs[i]) {
+			free(iter->sos_objs);
+			free(iter);
+			return NULL;
+		}
+	}
+#endif
+	return iter;
+}
+
+int dsos_iter_close(dsos_iter_t *iter)
+{
+	int			i, ret;
+	rpc_iter_close_in_t	args_in;
+	rpc_iter_close_out_t	args_out;
+
+	args_in.iter_handles = iter->handles;
+
+	ret = dsos_rpc_iter_close(&args_in, &args_out);
+
+	for (i = 0; i < g.num_servers; ++i)
+		mm_free(g.heap, iter->rma_bufs[i]);
+	free(iter->sos_objs);
+	free(iter->rma_bufs);
+	iter->handles = NULL;
+
+	return ret;
+}
+
+sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
+{
+	int			i, ret;
+	size_t			obj_sz;
+	char			*obj_data;
+	rpc_iter_step_all_in_t	args_in;
+	rpc_iter_step_all_out_t	args_out;
+
+	args_in.op           = DSOSD_MSG_ITER_OP_BEGIN;
+	args_in.iter_handles = iter->handles;
+	args_in.vas          = iter->rma_bufs;
+	args_in.obj_sz       = iter->obj_sz;
+
+	for (i = 0; i < g.num_servers; ++i) {
+		if (iter->sos_objs[i]) {
+			sos_obj_put(iter->sos_objs[i]);
+			iter->sos_objs[i] = NULL;
+		}
+	}
+
+	ret = dsos_rpc_iter_step_all(&args_in, &args_out);
+	if (ret)
+		return NULL;
+
+	for (i = 0; i < g.num_servers; ++i) {
+		if (!args_out.found[i])
+			continue;
+#if 1
+		// This will go away once sos_obj_malloc() allocs mapped mem.
+		iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
+		if (!iter->sos_objs[i])
+			return NULL;
+		sos_obj_data_get(iter->sos_objs[i], &obj_data, &obj_sz);
+		memcpy(obj_data, iter->rma_bufs[i], obj_sz);
+#endif
+		iter_insert_obj(iter, i);
+	}
+	return iter_remove_min(iter);
+}
+
+sos_obj_t dsos_iter_next(dsos_iter_t *iter)
+{
+	int			ret, server_num;
+	size_t			obj_sz;
+	char			*obj_data;
+	rpc_iter_step_one_in_t	args_in;
+	rpc_iter_step_one_out_t	args_out;
+
+	dsos_debug("iter %p last_srvr %d\n", iter, iter->last_srvr);
+
+	if (iter->done)
+		return NULL;
+
+	server_num = iter->last_srvr;
+
+	args_in.op          = DSOSD_MSG_ITER_OP_NEXT;
+	args_in.iter_handle = iter->handles[iter->last_srvr];
+	args_in.va          = iter->rma_bufs[server_num];
+	args_in.obj_sz      = iter->obj_sz;
+	args_in.server_num  = server_num;
+
+	ret = dsos_rpc_iter_step_one(&args_in, &args_out);
+	if (ret)
+		return NULL;
+
+	if (args_out.found) {
+#if 1
+		// This will go away once sos_obj_malloc() allocs mapped mem.
+		iter->sos_objs[server_num] = sos_obj_malloc(iter->schema->sos_schema);
+		if (!iter->sos_objs[server_num])
+			return NULL;
+		sos_obj_data_get(iter->sos_objs[server_num], &obj_data, &obj_sz);
+		memcpy(obj_data, iter->rma_bufs[server_num], obj_sz);
+#endif
+		iter_insert_obj(iter, server_num);
+	}
+
+	return iter_remove_min(iter);
 }

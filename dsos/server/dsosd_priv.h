@@ -54,9 +54,14 @@ typedef struct dsosd_req_s {
 	ods_atomic_t		refcount;
 	dsosd_client_t		*client;
 	dsosd_msg_t		*resp;         // response message
-	size_t			resp_max_len;
+	size_t			resp_max_len;  // size allocated for resp msg
+	size_t			resp_len;      // actual response msg size
 	void			*ctxt;
+#if 1
+	// The following field goes away once SOS can map the ODS maps
+	// so objects can be RMA'd directly.
 	void			*rma_buf;      // XXX buf from registered heap (temporary)
+#endif
 } dsosd_req_t;
 
 /* Red-black tree node to map a string to a pointer. */
@@ -100,6 +105,7 @@ void		rpc_handle_container_new(zap_ep_t ep, dsosd_msg_container_new_req_t *msg, 
 void		rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len);
 void		rpc_handle_obj_index(zap_ep_t ep, dsosd_msg_obj_index_req_t *msg, size_t len);
 void		rpc_handle_obj_find(zap_ep_t ep, dsosd_msg_obj_find_req_t *msg, size_t len);
+void		rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len);
 void		rpc_handle_part_create(zap_ep_t ep, dsosd_msg_part_create_req_t *msg, size_t len);
 void		rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t len);
 void		rpc_handle_part_set_state(zap_ep_t ep, dsosd_msg_part_set_state_req_t *msg, size_t len);

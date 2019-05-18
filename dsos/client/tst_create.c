@@ -29,7 +29,9 @@ sos_attr_t	attr_seq, attr_hash, attr_data;
 
 uint64_t	hash(void *buf, int len);
 void		do_obj_creates();
-void		do_lookups();
+void		do_obj_finds();
+void		do_obj_iter();
+void		do_init();
 dsos_t		*create_cont(char *path, int perms);
 
 void usage(char *av[])
@@ -44,12 +46,15 @@ void usage(char *av[])
 int main(int ac, char *av[])
 {
 	int		c, i, ret;
+	int		find = 0, iter = 0, create = 0;
 	char		*config = NULL;
 
 	struct option	lopts[] = {
 		{ "config",	required_argument, NULL, 'c' },
 		{ "id",	        required_argument, NULL, 'i' },
-		{ "lookup",     no_argument,       NULL, 'l' },
+		{ "find",       no_argument,       NULL, 'f' },
+		{ "create",     no_argument,       NULL, 'o' },
+		{ "iter",       no_argument,       NULL, 'l' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ 0,		0,		   0,     0  }
@@ -64,8 +69,14 @@ int main(int ac, char *av[])
 		    case 'i':
 			id = atoi(optarg) - 1;
 			break;
+		    case 'o':
+			create = 1;
+			break;
+		    case 'f':
+			find = 1;
+			break;
 		    case 'l':
-			lookup = 1;
+			iter = 1;
 			break;
 		    case 'n':
 			num_iters = atoi(optarg);
@@ -94,10 +105,14 @@ int main(int ac, char *av[])
 		exit(1);
 	}
 
-	if (lookup)
-		do_lookups();
-	else
+	do_init();
+
+	if (create)
 		do_obj_creates();
+	if (iter)
+		do_obj_iter();
+	if (find)
+		do_obj_finds();
 
 	dsos_container_close(cont);
 	dsos_disconnect();
@@ -146,6 +161,8 @@ void idx_cb(dsos_obj_t *obj, void *ctxt)
 
 	tid = (pid_t)syscall(SYS_gettid);
 	for (i = 0; i < obj->req_all->num_servers; ++i) {
+		if (!obj->req_all->reqs[i])
+			continue;
 		resp = (dsosd_msg_obj_index_resp_t *)obj->req_all->reqs[i]->resp;
 		if (!resp)
 			continue;
@@ -169,13 +186,14 @@ void obj_cb(dsos_obj_t *obj, void *ctxt)
 		printf("[%5d] obj %p ctxt %p no response from server\n", tid, obj, ctxt);
 		return;
 	}
-
+#if 0
 	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n", tid,
 	       i, obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
 	       resp->obj_id.serv,
 	       resp->obj_id.ods,
 	       resp->len);
 	fflush(stdout);
+#endif
 
 	refs[i] = resp->obj_id.as_obj_ref;
 	sem_post(&sem);
@@ -186,7 +204,7 @@ struct sos_schema_template schema_template = {
 	.attrs = {
 		{ .name = "seq",  .type = SOS_TYPE_UINT64,     .indexed = 1 },
 		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 0 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 1, .size = 400 },
+		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 1, .size = 2400 },
 		{ .name = NULL }
 	}
 };
@@ -260,35 +278,24 @@ dsos_t *create_cont(char *path, int perms)
 
 void do_obj_creates()
 {
-	int		i, j, ret;
+	int		i, ret;
 	uint64_t	num;
-	uint32_t	x;
-	char		*mydata, *p;
+	char		*mydata;
 	dsos_obj_t	*obj;
-	sos_key_t	key;
-	sos_obj_ref_t	obj_ref;
-
-	do_init();
 
 	mydata = malloc(4001);
 	refs = malloc(num_iters * sizeof(*refs));
 	sem_init(&sem, 0, 0);
 	sem_init(&sem2, 0, 0);
 	num = num_iters * id;
-	x = 0;
 	for (i = 0; i < num_iters; ++i) {
 		obj = dsos_obj_alloc(schema, obj_cb, (void *)(uintptr_t)i);
 		if (!obj) {
 			fprintf(stderr, "could not create object");
 			exit(1);
 		}
-#if 0
-		for (p = mydata, j = 0; j < 500; ++j, p += 8)
-			sprintf(p, " %06x%c", x++, id);
-#endif
 		sprintf(mydata, "seq=%08x", num);
 		sos_obj_attr_value_set(obj->sos_obj, attr_seq, num);
-		num += 1;
 		sos_obj_attr_value_set(obj->sos_obj, attr_hash, hash(mydata, 400));
 		sos_obj_attr_value_set(obj->sos_obj, attr_data, strlen(mydata)+1, mydata);
 
@@ -298,6 +305,8 @@ void do_obj_creates()
 			exit(1);
 		}
 		sem_wait(&sem);
+		printf("obj %d %d %s %d\n", num, num, mydata, hash(mydata,400));
+		num += 1;
 
 		ret = dsos_obj_index(obj, idx_cb, (void *)(uintptr_t)i);
 		if (ret) {
@@ -315,48 +324,69 @@ void do_obj_creates()
 	for (i = 0; i < num_iters; ++i)
 		sem_wait(&sem);
 #endif
-
+#if 0
 	printf("all objects created:\n");
 	for (i = 0; i < num_iters; ++i) {
 		printf("\t%08lx%08lx\n", refs[i]);
 	}
-
-#if 1
-	num = num_iters * id;
-	for (i = 0; i < num_iters; ++i) {
-		key = sos_key_for_attr(NULL, attr_seq, num);
-		ret = dsos_obj_find(schema, attr_seq, key, &obj_ref);
-		printf("obj %d ret %d obj_ref %08lx%08lx\n", num, ret, obj_ref.ref.ods, obj_ref.ref.obj);
-		fflush(stdout);
-		if (ret || memcmp(&refs[num - num_iters*id], &obj_ref, sizeof(obj_ref))) {
-			printf("DIFF\n");
-			break;
-		}
-		++num;
-	}
 #endif
 }
 
-void do_lookups()
+void do_obj_finds()
 {
-	int		i, ret;
+	int		i;
 	uint64_t	num;
+	char		*mydata;
 	sos_key_t	key;
-	sos_obj_ref_t	obj_ref;
+	sos_obj_t	sos_obj;
 
-	do_init();
-
-	num = 0;
+	mydata = malloc(4000);
+	num = num_iters * id;
 	for (i = 0; i < num_iters; ++i) {
 		key = sos_key_for_attr(NULL, attr_seq, num);
-		ret = dsos_obj_find(schema, attr_seq, key, &obj_ref);
-		if (ret) {
-			printf("ret %d\n", ret);
-			exit(1);
+		sos_obj = dsos_obj_find(schema, attr_seq, key);
+		if (sos_obj) {
+			char buf1[16], buf2[32];
+			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
+			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
+			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+		} else {
+			printf("obj %d NOT FOUND\n", num);
+			break;
 		}
-		printf("obj %d obj_ref %08lx%08lx\n", num, obj_ref.ref.ods, obj_ref.ref.obj);
+		fflush(stdout);
+		sos_obj_put(sos_obj);
 		++num;
 	}
+}
+
+void do_obj_iter()
+{
+	uint64_t	num;
+	char		*mydata;
+	sos_obj_t	sos_obj;
+	dsos_iter_t	*iter;
+
+	iter = dsos_iter_new(schema, attr_seq);
+	if (!iter) {
+		printf("could not create iter\n");
+		exit(1);
+	}
+	printf("created dsos iter\n");
+	mydata = malloc(4000);
+	num = num_iters * id;
+	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
+		char buf1[16], buf2[32];
+		sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
+		sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
+		sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+		printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+		sos_obj_put(sos_obj);
+		++num;
+		if (--num_iters <= 0) break;
+	}
+	return;
 }
 
 uint64_t hash(void *buf, int len)

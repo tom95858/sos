@@ -20,8 +20,8 @@ typedef uint64_t	dsosd_handle_t;
  * its container on that server. This overlays the original (local) SOS
  * obj id of the same size; it overloads the ODS ref part to store
  * the server ref. The ODS ref is not needed because it is now
- * implied from the container, and the assumption that the container in
- * DSOS has only one partition.
+ * implied from the container, and from the assumption that the container
+ * in DSOS has only one partition.
  */
 typedef struct {
 	union {
@@ -46,12 +46,20 @@ enum {
 	DSOSD_MSG_OBJ_INDEX_RESP,
 	DSOSD_MSG_OBJ_FIND_REQ,
 	DSOSD_MSG_OBJ_FIND_RESP,
+	DSOSD_MSG_OBJ_GET_REQ,
+	DSOSD_MSG_OBJ_GET_RESP,
 	DSOSD_MSG_CONTAINER_NEW_REQ,
 	DSOSD_MSG_CONTAINER_NEW_RESP,
 	DSOSD_MSG_CONTAINER_OPEN_REQ,
 	DSOSD_MSG_CONTAINER_OPEN_RESP,
 	DSOSD_MSG_CONTAINER_CLOSE_REQ,
 	DSOSD_MSG_CONTAINER_CLOSE_RESP,
+	DSOSD_MSG_ITERATOR_CLOSE_REQ,
+	DSOSD_MSG_ITERATOR_CLOSE_RESP,
+	DSOSD_MSG_ITERATOR_NEW_REQ,
+	DSOSD_MSG_ITERATOR_NEW_RESP,
+	DSOSD_MSG_ITERATOR_STEP_REQ,
+	DSOSD_MSG_ITERATOR_STEP_RESP,
 	DSOSD_MSG_PART_CREATE_REQ,
 	DSOSD_MSG_PART_CREATE_RESP,
 	DSOSD_MSG_PART_FIND_REQ,
@@ -82,6 +90,12 @@ typedef struct dsosd_msg_hdr {
 	uint16_t	status;
 	uint32_t	flags;
 } dsosd_msg_hdr_t;
+
+// This is in messages that move SOS objects between client and server.
+typedef struct dsosd_msg_hdr2 {
+	uint64_t	obj_sz;
+	uint64_t	obj_va;
+} dsosd_msg_hdr2_t;
 
 typedef struct dsosd_msg_ping_req {
 	dsosd_msg_hdr_t		hdr;
@@ -193,9 +207,8 @@ typedef struct dsosd_msg_schema_by_name_resp {
 
 typedef struct dsosd_msg_obj_create_req {
 	dsosd_msg_hdr_t		hdr;
+	dsosd_msg_hdr2_t	hdr2;
 	dsosd_handle_t		schema_handle;
-	uint64_t		len;
-	uint64_t		va;
 	char			data[];
 } dsosd_msg_obj_create_req_t;
 
@@ -221,6 +234,7 @@ typedef struct dsosd_msg_obj_index_resp {
 
 typedef struct dsosd_msg_obj_find_req {
 	dsosd_msg_hdr_t		hdr;
+	dsosd_msg_hdr2_t	hdr2;
 	dsosd_handle_t		cont_handle;
 	dsosd_handle_t		schema_handle;
 	uint32_t		attr_id;
@@ -230,22 +244,90 @@ typedef struct dsosd_msg_obj_find_req {
 
 typedef struct dsosd_msg_obj_find_resp {
 	dsosd_msg_hdr_t		hdr;
-	sos_obj_ref_t		obj_id;
+	dsosd_msg_hdr2_t	hdr2;
+	dsosd_objid_t		obj_id;
+	char			data[];
 } dsosd_msg_obj_find_resp_t;
+
+typedef struct dsosd_msg_obj_get_req {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_msg_hdr2_t	hdr2;
+	dsosd_handle_t		cont_handle;
+	dsosd_objid_t		obj_id;
+} dsosd_msg_obj_get_req_t;
+
+typedef struct dsosd_msg_obj_get_resp {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_msg_hdr2_t	hdr2;
+	char			data[];
+} dsosd_msg_obj_get_resp_t;
+
+typedef struct dsosd_msg_iterator_new_req {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_handle_t		cont_handle;
+	dsosd_handle_t		schema_handle;
+	uint32_t		attr_id;
+} dsosd_msg_iterator_new_req_t;
+
+typedef struct dsosd_msg_iterator_new_resp {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_handle_t		iter_handle;
+} dsosd_msg_iterator_new_resp_t;
+
+typedef struct dsosd_msg_iterator_close_req {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_handle_t		iter_handle;
+} dsosd_msg_iterator_close_req_t;
+
+typedef struct dsosd_msg_iterator_close_resp {
+	dsosd_msg_hdr_t		hdr;
+} dsosd_msg_iterator_close_resp_t;
+
+enum {
+	DSOSD_MSG_ITER_OP_NONE = 0x00000001,
+	DSOSD_MSG_ITER_OP_BEGIN,
+	DSOSD_MSG_ITER_OP_END,
+	DSOSD_MSG_ITER_OP_NEXT,
+	DSOSD_MSG_ITER_OP_PREV,
+};
+
+typedef struct dsosd_msg_iterator_step_req {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_msg_hdr2_t	hdr2;
+	dsosd_handle_t		iter_handle;
+	uint32_t		op;
+} dsosd_msg_iterator_step_req_t;
+
+typedef struct dsosd_msg_iterator_step_resp {
+	dsosd_msg_hdr_t		hdr;
+	dsosd_msg_hdr2_t	hdr2;
+	char			data[];
+} dsosd_msg_iterator_step_resp_t;
 
 typedef struct dsosd_msg {
 	union {
-		dsosd_msg_hdr_t				hdr;
+		struct {
+			dsosd_msg_hdr_t			hdr;
+			dsosd_msg_hdr2_t		hdr2;
+		};
 		dsosd_msg_container_close_req_t		container_close_req;
 		dsosd_msg_container_close_resp_t	container_close_resp;
 		dsosd_msg_container_new_req_t		container_new_req;
 		dsosd_msg_container_new_resp_t		container_new_resp;
 		dsosd_msg_container_open_req_t		container_open_req;
 		dsosd_msg_container_open_resp_t		container_open_resp;
+		dsosd_msg_iterator_close_req_t		iterator_close_req;
+		dsosd_msg_iterator_close_resp_t		iterator_close_resp;
+		dsosd_msg_iterator_new_req_t		iterator_new_req;
+		dsosd_msg_iterator_new_resp_t		iterator_new_resp;
+		dsosd_msg_iterator_step_req_t		iterator_step_req;
+		dsosd_msg_iterator_step_resp_t		iterator_step_resp;
 		dsosd_msg_obj_create_req_t		obj_create_req;
 		dsosd_msg_obj_create_resp_t		obj_create_resp;
 		dsosd_msg_obj_find_req_t		obj_find_req;
 		dsosd_msg_obj_find_resp_t		obj_find_resp;
+		dsosd_msg_obj_get_req_t			obj_get_req;
+		dsosd_msg_obj_get_resp_t		obj_get_resp;
 		dsosd_msg_obj_index_req_t		obj_index_req;
 		dsosd_msg_obj_index_resp_t		obj_index_resp;
 		dsosd_msg_part_create_req_t		part_create_req;

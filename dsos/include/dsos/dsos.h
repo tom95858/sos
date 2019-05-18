@@ -6,6 +6,7 @@
 typedef struct dsos_s		dsos_t;
 typedef struct dsos_part_s	dsos_part_t;
 typedef struct dsos_schema_s	dsos_schema_t;
+typedef struct dsos_iter_s	dsos_iter_t;
 typedef struct dsos_obj_s	dsos_obj_t;
 typedef void (*dsos_obj_cb_t)(dsos_obj_t *, void *);
 
@@ -15,10 +16,13 @@ int		dsos_container_new(const char *path, int mode);
 void		dsos_disconnect(void);
 int		*dsos_err_get(void);
 int		dsos_init(const char *config_filename);
+sos_obj_t	dsos_iter_begin(dsos_iter_t *iter);
+int		dsos_iter_close(dsos_iter_t *iter);
+dsos_iter_t	*dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr);
+sos_obj_t	dsos_iter_next(dsos_iter_t *iter);
 dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_obj_create(dsos_obj_t *obj);
-int		dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key,
-			      sos_obj_ref_t *pref);
+sos_obj_t	dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key);
 int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path);
 dsos_part_t	*dsos_part_find(dsos_t *cont, const char *name);

@@ -111,7 +111,7 @@ int main(int ac, char *av[])
 	zap_close(g.ep);
 	zap_free(g.ep);
 	/* XXX Zap has issues on exit even with a sleep here. */
-	sleep(2);
+	sleep(1);
 	return 0;
 }
 
@@ -242,7 +242,7 @@ static void handle_rendezvous(zap_ep_t ep, zap_map_t map, void *buf, size_t len)
 	dsosd_debug("ep %p got map %p\n", ep, map);
 }
 
-// we get here as part of a DSOSD_OBJ_CREATE req
+// we get here as part of a create-object req
 // the rma from the client is complete, finish the req
 static void handle_read_complete(zap_ep_t ep, void *ctxt)
 {
@@ -272,33 +272,38 @@ static void handle_read_complete(zap_ep_t ep, void *ctxt)
 
 	req->resp->u.hdr.status = ret;
 	req->resp->u.hdr.flags  = 0;
-	dsosd_debug("new obj %p rma complete ret %d\n", obj, ret);
+	dsosd_debug("new obj %p rma-read complete ret %d\n", obj, ret);
 	dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 }
 
+// we get here as part of an RMA-write of a SOS obj to the client
+// the rma from the client is complete, finish the req
 static void handle_write_complete(zap_ep_t ep, void *ctxt)
 {
+	dsosd_req_t	*req    = (dsosd_req_t *)ctxt;
+	sos_obj_t	sos_obj = (sos_obj_t)req->ctxt;
+	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+#if 1
+	/* Remove this once SOS can map objects directly. */
+	mm_free(client->heap, req->rma_buf);
+	req->rma_buf = NULL;
+#endif
+	sos_obj_put(sos_obj);
+
+	req->resp->u.hdr.status = 0;
+	req->resp->u.hdr.flags  = 0;
+	dsosd_debug("obj %p rma-write complete\n", sos_obj);
+	dsosd_req_complete(req, req->resp_len);
 }
 
-static const char *msg_type_to_str(int id)
+static const char *msg_type_to_str(int type)
 {
-	switch (id) {
+	switch (type) {
 	    case DSOSD_MSG_PING_REQ:
 		return "DSOSD_MSG_PING_REQ";
 	    case DSOSD_MSG_PING_RESP:
 		return "DSOSD_MSG_PING_RESP";
-	    case DSOSD_MSG_OBJ_CREATE_REQ:
-		return "DSOSD_OBJ_CREATE_REQ";
-	    case DSOSD_MSG_OBJ_CREATE_RESP:
-		return "DSOSD_OBJ_CREATE_RESP";
-	    case DSOSD_MSG_OBJ_INDEX_REQ:
-		return "DSOSD_OBJ_INDEX_REQ";
-	    case DSOSD_MSG_OBJ_INDEX_RESP:
-		return "DSOSD_OBJ_INDEX_RESP";
-	    case DSOSD_MSG_OBJ_FIND_REQ:
-		return "DSOSD_OBJ_FIND_REQ";
-	    case DSOSD_MSG_OBJ_FIND_RESP:
-		return "DSOSD_OBJ_FIND_RESP";
 	    case DSOSD_MSG_CONTAINER_NEW_REQ:
 		return "DSOSD_CONTAINER_NEW_REQ";
 	    case DSOSD_MSG_CONTAINER_NEW_RESP:
@@ -311,6 +316,34 @@ static const char *msg_type_to_str(int id)
 		return "DSOSD_CONTAINER_CLOSE_REQ";
 	    case DSOSD_MSG_CONTAINER_CLOSE_RESP:
 		return "DSOSD_CONTAINER_CLOSE_RESP";
+	    case DSOSD_MSG_ITERATOR_CLOSE_REQ:
+		return "DSOSD_ITERATOR_CLOSE_REQ";
+	    case DSOSD_MSG_ITERATOR_CLOSE_RESP:
+		return "DSOSD_ITERATOR_CLOSE_RESP";
+	    case DSOSD_MSG_ITERATOR_NEW_REQ:
+		return "DSOSD_ITERATOR_NEW_REQ";
+	    case DSOSD_MSG_ITERATOR_NEW_RESP:
+		return "DSOSD_ITERATOR_NEW_RESP";
+	    case DSOSD_MSG_ITERATOR_STEP_REQ:
+		return "DSOSD_ITERATOR_STEP_REQ";
+	    case DSOSD_MSG_ITERATOR_STEP_RESP:
+		return "DSOSD_ITERATOR_STEP_RESP";
+	    case DSOSD_MSG_OBJ_CREATE_REQ:
+		return "DSOSD_OBJ_CREATE_REQ";
+	    case DSOSD_MSG_OBJ_CREATE_RESP:
+		return "DSOSD_OBJ_CREATE_RESP";
+	    case DSOSD_MSG_OBJ_INDEX_REQ:
+		return "DSOSD_OBJ_INDEX_REQ";
+	    case DSOSD_MSG_OBJ_INDEX_RESP:
+		return "DSOSD_OBJ_INDEX_RESP";
+	    case DSOSD_MSG_OBJ_FIND_REQ:
+		return "DSOSD_OBJ_FIND_REQ";
+	    case DSOSD_MSG_OBJ_FIND_RESP:
+		return "DSOSD_OBJ_FIND_RESP";
+	    case DSOSD_MSG_OBJ_GET_REQ:
+		return "DSOSD_OBJ_GET_REQ";
+	    case DSOSD_MSG_OBJ_GET_RESP:
+		return "DSOSD_OBJ_GET_RESP";
 	    case DSOSD_MSG_PART_CREATE_REQ:
 		return "DSOSD_PART_CREATE_REQ";
 	    case DSOSD_MSG_PART_CREATE_RESP:
@@ -361,6 +394,15 @@ static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
 		rpc_handle_container_close(ep, (dsosd_msg_container_close_req_t *)msg, len);
 		break;
+	    case DSOSD_MSG_ITERATOR_CLOSE_REQ:
+		rpc_handle_iterator_close(ep, (dsosd_msg_iterator_close_req_t *)msg, len);
+		break;
+	    case DSOSD_MSG_ITERATOR_NEW_REQ:
+		rpc_handle_iterator_new(ep, (dsosd_msg_iterator_new_req_t *)msg, len);
+		break;
+	    case DSOSD_MSG_ITERATOR_STEP_REQ:
+		rpc_handle_iterator_step(ep, (dsosd_msg_iterator_step_req_t *)msg, len);
+		break;
 	    case DSOSD_MSG_OBJ_CREATE_REQ:
 		rpc_handle_obj_create(ep, (dsosd_msg_obj_create_req_t *)msg, len);
 		break;
@@ -369,6 +411,9 @@ static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 		break;
 	    case DSOSD_MSG_OBJ_FIND_REQ:
 		rpc_handle_obj_find(ep, (dsosd_msg_obj_find_req_t *)msg, len);
+		break;
+	    case DSOSD_MSG_OBJ_GET_REQ:
+		rpc_handle_obj_get(ep, (dsosd_msg_obj_get_req_t *)msg, len);
 		break;
 	    case DSOSD_MSG_PART_CREATE_REQ:
 		rpc_handle_part_create(ep, (dsosd_msg_part_create_req_t *)msg, len);
@@ -432,58 +477,6 @@ void dsosd_client_put(dsosd_client_t *client)
 	dsosd_debug("%p refcount was %d\n", client, client->refcount);
 	if (!ods_atomic_dec(&client->refcount))
 		free(client);
-}
-
-dsosd_req_t *dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t max_msg_len)
-{
-	dsosd_req_t	*req;
-
-	req = malloc(sizeof(dsosd_req_t));
-	if (!req)
-		dsosd_fatal("out of memory");
-
-	req->refcount = 1;  // start with a reference
-	req->client   = client;
-	req->resp     = malloc(max_msg_len);
-	if (!req->resp)
-		dsosd_fatal("out of memory\n");
-	req->resp_max_len       = max_msg_len;
-	req->resp->u.hdr.type   = type;
-	req->resp->u.hdr.id     = msg_id;
-	req->resp->u.hdr.status = 0;
-	req->resp->u.hdr.flags  = 0;
-
-	dsosd_client_get(client);
-
-	dsosd_debug("%p client %p type %d\n", req, client, type);
-
-	return req;
-}
-
-zap_err_t dsosd_req_complete(dsosd_req_t *req, size_t len)
-{
-	zap_err_t	zerr;
-
-	zerr = zap_send(req->client->ep, req->resp, len);
-	if (zerr)
-		dsosd_error("zap_send ep %p zerr %d %s\n", req->client->ep, zerr, zap_err_str(zerr));
-	dsosd_req_put(req);
-	return zerr;
-}
-
-void dsosd_req_get(dsosd_req_t *req)
-{
-	ods_atomic_inc(&req->refcount);
-}
-
-void dsosd_req_put(dsosd_req_t *req)
-{
-	dsosd_debug("%p\n", req);
-	if (!ods_atomic_dec(&req->refcount)) {
-		dsosd_client_put(req->client);
-		free(req->resp);
-		free(req);
-	}
 }
 
 int idx_rbn_cmp_fn(void *tree_key, void *key)

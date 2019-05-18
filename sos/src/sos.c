@@ -1618,6 +1618,7 @@ void sos_obj_put(sos_obj_t obj)
 			/* A memory object */
 			ods_obj_put(obj->obj);
 			free(sos);
+			free(obj);
 			return;
 		}
 		ods_obj_put(obj->obj);
