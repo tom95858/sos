@@ -41,12 +41,10 @@ dsos_obj_t *dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt)
 
 void dsos_obj_free(dsos_obj_t *obj)
 {
-	dsos_debug("obj %p sos_obj %p req %p req_all %p flags 0x%x msg %p buf %p\n",
+	dsos_debug("obj %p sos_obj %p req %p req_all %p flags 0x%x msg %p\n",
 		   obj, obj->sos_obj, obj->req, obj->req_all, obj->flags,
-		   obj->req->msg, obj->buf);
+		   obj->req->msg);
 
-	if (!(obj->flags & DSOS_OBJ_INLINE))
-		mm_free(g.heap, obj->buf);
 	sos_obj_put(obj->sos_obj);
 	dsos_req_put(obj->req);
 	if (obj->req_all)
@@ -67,27 +65,21 @@ int dsos_obj_create(dsos_obj_t *obj)
 
 	max_inline = req->msg_len_max - sizeof(dsosd_msg_obj_create_req_t);
 	if (obj_sz > max_inline) {
-		// alloc from client/server shared heap
-		obj->buf = mm_alloc(g.heap, obj_sz);
-		if (!obj->buf)
-			return ENOMEM;
-		msg->hdr2.obj_va = (uint64_t)obj->buf;
+		msg->hdr2.obj_va = (uint64_t)obj_data;
 	} else {
-		// alloc in-line (within the send buffer)
+		// copy into the msg and send in-line
 		msg->hdr.flags |= DSOSD_MSG_IMM;
 		obj->flags |= DSOS_OBJ_INLINE;
-		obj->buf = msg->data;
+		memcpy(msg->data, obj_data, obj_sz);
 		msg->hdr2.obj_va = 0;
 	}
-
-	memcpy(obj->buf, obj_data, obj_sz);
 
 	args_in.obj = obj;
 
 	ret = dsos_rpc_object_create(&args_in);
 
-	dsos_debug("obj %p schema %p obj_data %p sz %d req %p buf %p cb %p/%p rpc %d\n", obj, obj->schema,
-		   obj_data, obj_sz, obj->req, obj->buf, obj->cb, obj->ctxt, ret);
+	dsos_debug("obj %p schema %p obj_data %p obj_sz %d req %p cb %p/%p rpc %d\n",
+		   obj, obj->schema, obj_data, obj_sz, obj->req, obj->cb, obj->ctxt, ret);
 	return ret;
 }
 
@@ -99,8 +91,8 @@ static void obj_create_cb(dsos_req_t *req, size_t len, void *ctxt)
 
 	// req->resp contains the response (status, global obj id)
 
-	dsos_debug("obj %p flags 0x%x req %p conn %p len %d buf %p cb %p/%p\n",
-		   obj, obj->flags, req, conn, len, obj->buf, obj->cb, obj->ctxt);
+	dsos_debug("obj %p flags 0x%x req %p conn %p len %d cb %p/%p\n",
+		   obj, obj->flags, req, conn, len, obj->cb, obj->ctxt);
 
 	obj->flags |= DSOS_OBJ_CREATED;
 	obj->obj_id = resp->obj_id;

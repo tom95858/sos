@@ -18,14 +18,6 @@ libdsos_la_SOURCES = dsos.c dsos_api.c dsos_config.c dsos_conn.c \
 	dsos_err.c dsos_obj.c dsos_req.c dsos_rpc.c
 lib_LTLIBRARIES = libdsos.la
 
-dsos_ping_SOURCES = dsos_ping.c
-dsos_ping_LDADD = libdsos.la                       \
-	$(top_builddir)/sos/src/libsos.la          \
-	$(top_builddir)/util/json/libjson_util.la  \
-	$(top_builddir)/util/mmalloc/libmmalloc.la \
-	@LIBZAP_LIBDIR@/libzap.la -lssl
-bin_PROGRAMS += dsos_ping
-
 tst_create_SOURCES = tst_create.c
 tst_create_LDADD = libdsos.la                      \
 	$(top_builddir)/sos/src/libsos.la          \

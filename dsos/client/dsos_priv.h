@@ -139,10 +139,6 @@ typedef struct dsos_iter_s {
 	size_t		obj_sz;               // object size this iterates over
 	sos_obj_t	*sos_objs;            // vector of recvd objs
 	struct rbt	rbt;                  // for finding min key value of recvd objs
-#if 1
-	// The following will go away once sos_obj_malloc() allocs mapped mem.
-	void		**rma_bufs;           // mapped mem for rma; temporary for now
-#endif
 } dsos_iter_t;
 
 /*
@@ -183,7 +179,7 @@ typedef struct dsos_conn_s {
 /* Internal RPC API. */
 
 typedef struct {
-	char	hello[4];
+	int	server_num;
 } rpc_ping_in_t;
 typedef struct {
 	int	tot_num_connects;
@@ -191,8 +187,8 @@ typedef struct {
 	int	tot_num_reqs;
 	int	num_clients;
 } rpc_ping_out_t;
-int	dsos_rpc_ping(rpc_ping_in_t *args_inp,
-		      rpc_ping_out_t **args_outpp);
+int	dsos_rpc_ping(rpc_ping_in_t  *args_inp,
+		      rpc_ping_out_t *args_outp);
 
 typedef struct {
 	char		path[DSOSD_MSG_MAX_PATH];
@@ -346,8 +342,7 @@ int	dsos_rpc_iter_close(rpc_iter_close_in_t  *args_inp,
 typedef struct {
 	dsosd_handle_t	iter_handle;
 	int		op;
-	void		*va;
-	size_t		obj_sz;
+	sos_obj_t	sos_obj;
 	int		server_num;
 } rpc_iter_step_one_in_t;
 typedef struct {
@@ -359,8 +354,7 @@ int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
 typedef struct {
 	dsosd_handle_t	*iter_handles;
 	int		op;
-	void		**vas;
-	size_t		obj_sz;
+	sos_obj_t	*sos_objs;
 } rpc_iter_step_all_in_t;
 typedef struct {
 	int		*found;
@@ -406,6 +400,7 @@ dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_obj_create(dsos_obj_t *obj);
 sos_obj_t	dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key);
 int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
+int		dsos_ping(int server_num);
 dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
 
 #define dsos_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)

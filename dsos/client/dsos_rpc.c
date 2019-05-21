@@ -40,7 +40,34 @@ static void rpc_all_signal_cb(dsos_req_all_t *req_all, void *ctxt)
 	sem_post(&req_all->sem);
 }
 
-int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t **args_outpp)
+int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
+{
+	int			ret;
+	dsos_req_t		*req;
+	dsosd_msg_ping_req_t	*msg;
+	dsosd_msg_ping_resp_t	*resp;
+
+	req = dsos_req_new(rpc_signal_cb, NULL);
+	if (!req)
+		return ENOMEM;
+
+	msg = (dsosd_msg_ping_req_t *)req->msg;
+	msg->hdr.type      = DSOSD_MSG_PING_REQ;
+	msg->hdr.flags     = 0;
+	msg->hdr.status    = 0;
+
+	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_ping_req_t));
+	if (ret) {
+		dsos_error("ret %d\n", ret);
+		return ret;
+	}
+
+	sem_wait(&req->sem);
+
+	return req->resp->u.hdr.status;
+}
+
+int dsos_rpc_ping_all(rpc_ping_in_t *args_inp, rpc_ping_out_t **args_outpp)
 {
 	int			i, ret;
 	dsos_req_all_t		*req_all;
@@ -426,9 +453,10 @@ int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 	sos_obj_data_get(obj->sos_obj, &obj_data, &obj_sz);
 
 	/* Calculate the owning DSOS server. */
-	SHA256(obj->buf, obj_sz, sha);
+	SHA256(obj_data, obj_sz, sha);
 	server_id = sha[0] % g.num_servers;
-	dsos_debug("obj %p obj_sz %d owned by server %d\n", obj, obj_sz, server_id);
+	dsos_debug("obj %p obj_data %p obj_sz %d owned by server %d\n",
+		   obj, obj_data, obj_sz, server_id);
 
 	/*
 	 * Copy in args to the request message. If the object is in-line,
@@ -865,6 +893,8 @@ int dsos_rpc_iter_close(rpc_iter_close_in_t *args_inp, rpc_iter_close_out_t *arg
 int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_out_t *args_outp)
 {
 	int				i, ret;
+	size_t				obj_sz;
+	char				*obj_data;
 	dsos_req_all_t			*req_all;
 	dsosd_msg_iterator_step_req_t	*msg;
 	dsosd_msg_iterator_step_resp_t	*resp;
@@ -875,12 +905,13 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
+		sos_obj_data_get(args_inp->sos_objs[i], &obj_data, &obj_sz);
 		msg = (dsosd_msg_iterator_step_req_t *)req_all->reqs[i]->msg;
 		msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
 		msg->op          = args_inp->op;
 		msg->iter_handle = args_inp->iter_handles[i];
-		msg->hdr2.obj_va = (uint64_t)args_inp->vas[i];
-		msg->hdr2.obj_sz = args_inp->obj_sz;
+		msg->hdr2.obj_va = (uint64_t)obj_data;
+		msg->hdr2.obj_sz = obj_sz;
 	}
 
 	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_step_req_t));
@@ -911,9 +942,13 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_out_t *args_outp)
 {
 	int				ret;
+	size_t				obj_sz;
+	char				*obj_data;
 	dsos_req_t			*req;
 	dsosd_msg_iterator_step_req_t	*msg;
 	dsosd_msg_iterator_step_resp_t	*resp;
+
+	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
 
 	req = dsos_req_new(rpc_signal_cb, NULL);
 
@@ -922,8 +957,8 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
 	msg->op          = args_inp->op;
 	msg->iter_handle = args_inp->iter_handle;
-	msg->hdr2.obj_va = (uint64_t)args_inp->va;
-	msg->hdr2.obj_sz = args_inp->obj_sz;
+	msg->hdr2.obj_va = (uint64_t)obj_data;
+	msg->hdr2.obj_sz = obj_sz;
 
 	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
 	if (ret)

@@ -17,9 +17,18 @@
 
 /* Global variables. */
 struct globals_s	g;
-int	*REQ_ALL_SERVERS;
 
 #define ROUNDUP(s,r)	((s + (r - 1)) & ~(r - 1))
+
+static void *shared_heap_alloc(size_t sz)
+{
+	return mm_alloc(g.heap, sz);
+}
+
+static void shared_heap_free(void *p)
+{
+	mm_free(g.heap, p);
+}
 
 void dsos_log(const char *fmt, ...)
 {
@@ -45,12 +54,6 @@ int dsos_init(const char *config_filename)
 	g.zap = zap_get(g.opts.zap_prov_name, dsos_log, NULL);
 	if (!g.zap)
 		return ENETDOWN;
-
-	REQ_ALL_SERVERS = (int *)malloc(g.num_servers * sizeof(int));
-	if (!REQ_ALL_SERVERS)
-		dsos_fatal("out of memory\n");
-	for (i = 0; i < g.num_servers; ++i)
-		REQ_ALL_SERVERS[i] = 1;
 
 	dsos_err_clear();
 	for (i = 0; i < g.num_servers; ++i) {
@@ -81,7 +84,9 @@ int dsos_init(const char *config_filename)
 
 	g.heap = mm_new(g.heap_buf, g.opts.heap_sz, g.opts.heap_grain_sz);
 	if (!g.heap)
-		return;
+		dsos_fatal("could not create shared heap\n");
+
+	ods_obj_allocator_set(shared_heap_alloc, shared_heap_free);
 
 	dsos_err_clear();
 	for (i = 0; i < g.num_servers; ++i) {

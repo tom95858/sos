@@ -27,6 +27,7 @@ int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
 int		dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path);
 dsos_part_t	*dsos_part_find(dsos_t *cont, const char *name);
 int		dsos_part_state_set(dsos_part_t *part, sos_part_state_t new_state);
+int		dsos_ping(int server_num);
 int		dsos_schema_add(dsos_t *cont, dsos_schema_t *schema);
 dsos_schema_t	*dsos_schema_from_template(sos_schema_template_t t);
 dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);

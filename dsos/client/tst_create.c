@@ -17,6 +17,7 @@
 int		num_iters  = 4;
 int		sleep_msec = 0;
 int		lookup = 0;
+int		server_num;
 uint8_t		id;
 struct timespec	ts;
 uint64_t	nsecs;
@@ -32,6 +33,7 @@ void		do_obj_creates();
 void		do_obj_finds();
 void		do_obj_iter();
 void		do_init();
+void		do_ping();
 dsos_t		*create_cont(char *path, int perms);
 
 void usage(char *av[])
@@ -46,7 +48,7 @@ void usage(char *av[])
 int main(int ac, char *av[])
 {
 	int		c, i, ret;
-	int		find = 0, iter = 0, create = 0;
+	int		find = 0, iter = 0, create = 0, ping = 0;
 	char		*config = NULL;
 
 	struct option	lopts[] = {
@@ -55,6 +57,7 @@ int main(int ac, char *av[])
 		{ "find",       no_argument,       NULL, 'f' },
 		{ "create",     no_argument,       NULL, 'o' },
 		{ "iter",       no_argument,       NULL, 'l' },
+		{ "ping",       required_argument, NULL, 'p' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ 0,		0,		   0,     0  }
@@ -78,6 +81,10 @@ int main(int ac, char *av[])
 		    case 'l':
 			iter = 1;
 			break;
+		    case 'p':
+			ping = 1;
+			server_num = atoi(optarg);
+			break;
 		    case 'n':
 			num_iters = atoi(optarg);
 			break;
@@ -100,9 +107,20 @@ int main(int ac, char *av[])
 	ts.tv_sec  = nsecs / 1000000000;
 	ts.tv_nsec = nsecs % 1000000000;
 
+	printf("%d connecting\n", getpid());
 	if (dsos_init(config)) {
 		fprintf(stderr, "could not establish connections to all DSOS servers\n");
 		exit(1);
+	}
+
+	if (ping) {
+		printf("%d starting pings\n", getpid());
+		do_ping();
+		printf("%d disconnecting\n", getpid());
+		dsos_disconnect();
+		sleep(1);
+		printf("%d exiting\n", getpid());
+		return 0;
 	}
 
 	do_init();
@@ -117,6 +135,40 @@ int main(int ac, char *av[])
 	dsos_container_close(cont);
 	dsos_disconnect();
 	sleep(1);
+}
+
+void do_ping()
+{
+	int		i, ret;
+	struct timespec	beg, end, elapsed;
+	uint64_t	nsecs;
+
+	clock_gettime(CLOCK_REALTIME, &beg);
+	for (i = 0; i < num_iters; ++i) {
+		ret = dsos_ping(server_num);
+		if (ret) {
+			printf("error %d\n", ret);
+			fflush(stdout);
+			exit(1);
+		}
+	}
+	clock_gettime(CLOCK_REALTIME, &end);
+
+	if ((end.tv_nsec - beg.tv_nsec)<0) {
+		elapsed.tv_sec  = end.tv_sec - beg.tv_sec-1;
+		elapsed.tv_nsec = 1000000000 + end.tv_nsec - beg.tv_nsec;
+	} else {
+		elapsed.tv_sec  = end.tv_sec  - beg.tv_sec;
+		elapsed.tv_nsec = end.tv_nsec - beg.tv_nsec;
+	}
+	nsecs = elapsed.tv_sec * 1000000000 + elapsed.tv_nsec;
+
+	printf("%.0f pings/sec %.1f usecs/ping %.6f secs %09ld nsecs\n",
+	       num_iters/(nsecs/1000000000.0),
+	       (nsecs/1000.0)/num_iters,
+	       nsecs/1000000000.0,
+	       nsecs);
+	fflush(stdout);
 }
 
 void do_init()
@@ -204,7 +256,7 @@ struct sos_schema_template schema_template = {
 	.attrs = {
 		{ .name = "seq",  .type = SOS_TYPE_UINT64,     .indexed = 1 },
 		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 0 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 1, .size = 2400 },
+		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 1000 },
 		{ .name = NULL }
 	}
 };
@@ -308,12 +360,14 @@ void do_obj_creates()
 		printf("obj %d %d %s %d\n", num, num, mydata, hash(mydata,400));
 		num += 1;
 
+#if 0
 		ret = dsos_obj_index(obj, idx_cb, (void *)(uintptr_t)i);
 		if (ret) {
 			fprintf(stderr, "err %d indexing obj\n", ret);
 			exit(1);
 		}
 		sem_wait(&sem2);
+#endif
 
 		dsos_obj_free(obj);
 
