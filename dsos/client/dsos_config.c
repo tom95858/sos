@@ -25,6 +25,10 @@ int dsos_config_read(const char *config_file)
 
 	i = 0;
 	for (j_server = json_item_first(j_servers); j_server; j_server = json_item_next(j_server)) {
+		j = json_attr_find(j_server, "id");
+		if (!j)
+			dsos_fatal("config error: server #%d missing 'id' attribute\n", i);
+		g.conns[i].server_id = json_value_int(j);
 
 		j = json_attr_find(j_server, "host");
 		if (!j)
@@ -36,7 +40,7 @@ int dsos_config_read(const char *config_file)
 			dsos_fatal("config error: server #%d missing 'service' attribute\n", i);
 		g.conns[i].service = json_value_str(j)->str;
 
-		g.conns[i].server_id = i++;
+		++i;
 	}
 
 	j = json_attr_find(g.config, "zap_provider");

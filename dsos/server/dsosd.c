@@ -161,7 +161,7 @@ static void handle_connect_req(zap_ep_t ep)
 
 #if 1
 	// XXX map a heap we can RMA in to. This is temporary, until
-	// SOS can take a heap allocator or can alloc from reg mem.
+	// SOS can provide for RMA directly to/from objects.
 	client->heap_sz  = 4 * 1024 * 1024;
 	client->heap_buf = malloc(client->heap_sz);
 	zap_err_t zerr = zap_map(ep, &client->lmap, client->heap_buf, client->heap_sz, ZAP_ACCESS_NONE);
@@ -218,8 +218,8 @@ static void handle_disconnected(zap_ep_t ep)
 	if (client->heap_buf)
 		free(client->heap_buf);
 #endif
-	zap_free(ep);
 	dsosd_client_put(client);
+	zap_free(ep);
 	--g.num_clients;
 	++g.stats.tot_num_disconnects;
 }

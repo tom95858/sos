@@ -285,6 +285,7 @@ typedef struct dsosd_msg_iterator_close_resp {
 
 enum {
 	DSOSD_MSG_ITER_OP_NONE = 0x00000001,
+	DSOSD_MSG_ITER_OP_FIND,
 	DSOSD_MSG_ITER_OP_BEGIN,
 	DSOSD_MSG_ITER_OP_END,
 	DSOSD_MSG_ITER_OP_NEXT,
@@ -296,6 +297,8 @@ typedef struct dsosd_msg_iterator_step_req {
 	dsosd_msg_hdr2_t	hdr2;
 	dsosd_handle_t		iter_handle;
 	uint32_t		op;
+	uint32_t		data_len;
+	char			data[];
 } dsosd_msg_iterator_step_req_t;
 
 typedef struct dsosd_msg_iterator_step_resp {

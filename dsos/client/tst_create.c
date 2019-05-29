@@ -17,24 +17,28 @@
 int		num_iters  = 4;
 int		sleep_msec = 0;
 int		lookup = 0;
+int		progress = 0;
+int		sequential = 0;
 int		server_num;
 uint8_t		id;
-struct timespec	ts;
+struct timespec	beg, ts;
 uint64_t	nsecs;
 sem_t		sem;
 sem_t		sem2;
 sos_obj_ref_t	*refs;
 dsos_t		*cont;
 dsos_schema_t	*schema;
-sos_attr_t	attr_seq, attr_hash, attr_data;
+sos_attr_t	attr_seq, attr_hash, attr_data, attr_int1, attr_int2;
 
 uint64_t	hash(void *buf, int len);
 void		do_obj_creates();
 void		do_obj_finds();
 void		do_obj_iter();
+void		do_obj_iter_finds();
 void		do_init();
 void		do_ping();
 dsos_t		*create_cont(char *path, int perms);
+void		print_elapsed(int num_iters);
 
 void usage(char *av[])
 {
@@ -58,6 +62,8 @@ int main(int ac, char *av[])
 		{ "create",     no_argument,       NULL, 'o' },
 		{ "iter",       no_argument,       NULL, 'l' },
 		{ "ping",       required_argument, NULL, 'p' },
+		{ "progress",   no_argument,       NULL, 'g' },
+		{ "sequential", no_argument,       NULL, 'q' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ 0,		0,		   0,     0  }
@@ -80,6 +86,12 @@ int main(int ac, char *av[])
 			break;
 		    case 'l':
 			iter = 1;
+			break;
+		    case 'g':
+			progress = 1;
+			break;
+		    case 'q':
+			sequential = 1;
 			break;
 		    case 'p':
 			ping = 1;
@@ -107,7 +119,6 @@ int main(int ac, char *av[])
 	ts.tv_sec  = nsecs / 1000000000;
 	ts.tv_nsec = nsecs % 1000000000;
 
-	printf("%d connecting\n", getpid());
 	if (dsos_init(config)) {
 		fprintf(stderr, "could not establish connections to all DSOS servers\n");
 		exit(1);
@@ -130,7 +141,7 @@ int main(int ac, char *av[])
 	if (iter)
 		do_obj_iter();
 	if (find)
-		do_obj_finds();
+		do_obj_iter_finds();
 
 	dsos_container_close(cont);
 	dsos_disconnect();
@@ -139,43 +150,34 @@ int main(int ac, char *av[])
 
 void do_ping()
 {
-	int		i, ret;
-	struct timespec	beg, end, elapsed;
-	uint64_t	nsecs;
+	int			i, ret;
+	uint64_t		nsecs;
+	struct dsos_ping_stats	stats;
 
 	clock_gettime(CLOCK_REALTIME, &beg);
 	for (i = 0; i < num_iters; ++i) {
-		ret = dsos_ping(server_num);
+		ret = dsos_ping(server_num, &stats);
 		if (ret) {
 			printf("error %d\n", ret);
 			fflush(stdout);
 			exit(1);
 		}
+		if (progress && i && ((i % 50000) == 0)) {
+			printf("%d/%d conn/disc %d reqs %d clients\n",
+			       stats.tot_num_connects,
+			       stats.tot_num_disconnects,
+			       stats.tot_num_reqs,
+			       stats.num_clients);
+			print_elapsed(i);
+		}
 	}
-	clock_gettime(CLOCK_REALTIME, &end);
-
-	if ((end.tv_nsec - beg.tv_nsec)<0) {
-		elapsed.tv_sec  = end.tv_sec - beg.tv_sec-1;
-		elapsed.tv_nsec = 1000000000 + end.tv_nsec - beg.tv_nsec;
-	} else {
-		elapsed.tv_sec  = end.tv_sec  - beg.tv_sec;
-		elapsed.tv_nsec = end.tv_nsec - beg.tv_nsec;
-	}
-	nsecs = elapsed.tv_sec * 1000000000 + elapsed.tv_nsec;
-
-	printf("%.0f pings/sec %.1f usecs/ping %.6f secs %09ld nsecs\n",
-	       num_iters/(nsecs/1000000000.0),
-	       (nsecs/1000.0)/num_iters,
-	       nsecs/1000000000.0,
-	       nsecs);
-	fflush(stdout);
+	print_elapsed(num_iters);
 }
 
 void do_init()
 {
 	cont = dsos_container_open("/tmp/cont.sos", 0755);
 	if (!cont) {
-		printf("creating container\n");
 		cont = create_cont("/tmp/cont.sos", 0755);
 		if (!cont) {
 			fprintf(stderr, "could not create container\n");
@@ -202,6 +204,16 @@ void do_init()
 		fprintf(stderr, "could not get attr data from schema\n");
 		exit(1);
 	}
+	attr_int1 = sos_schema_attr_by_name(schema->sos_schema, "int1");
+	if (!attr_int1) {
+		fprintf(stderr, "could not get attr int1 from schema\n");
+		exit(1);
+	}
+	attr_int2 = sos_schema_attr_by_name(schema->sos_schema, "int2");
+	if (!attr_int2) {
+		fprintf(stderr, "could not get attr int2 from schema\n");
+		exit(1);
+	}
 }
 
 void idx_cb(dsos_obj_t *obj, void *ctxt)
@@ -226,37 +238,14 @@ void idx_cb(dsos_obj_t *obj, void *ctxt)
 	sem_post(&sem2);
 }
 
-void obj_cb(dsos_obj_t *obj, void *ctxt)
-{
-	int				ret;
-	pid_t				tid;
-	uint64_t			i = (uintptr_t)ctxt;
-	dsosd_msg_obj_create_resp_t	*resp = (dsosd_msg_obj_create_resp_t *)obj->req->resp;
-
-	tid = (pid_t)syscall(SYS_gettid);
-	if (!resp) {
-		printf("[%5d] obj %p ctxt %p no response from server\n", tid, obj, ctxt);
-		return;
-	}
-#if 0
-	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n", tid,
-	       i, obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
-	       resp->obj_id.serv,
-	       resp->obj_id.ods,
-	       resp->len);
-	fflush(stdout);
-#endif
-
-	refs[i] = resp->obj_id.as_obj_ref;
-	sem_post(&sem);
-}
-
 struct sos_schema_template schema_template = {
 	.name = "test",
 	.attrs = {
 		{ .name = "seq",  .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 0 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 1000 },
+		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 1 },
+		{ .name = "int1", .type = SOS_TYPE_UINT64,     .indexed = 1 },
+		{ .name = "int2", .type = SOS_TYPE_UINT64,     .indexed = 1 },
+		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 9000 },
 		{ .name = NULL }
 	}
 };
@@ -267,6 +256,8 @@ dsos_t *create_cont(char *path, int perms)
 	dsos_t		*cont;
 	dsos_part_t	*part;
 	dsos_schema_t	*schema;
+
+	printf("creating container\n");
 
 	ret = dsos_container_new(path, perms);
 	if (ret) {
@@ -325,7 +316,34 @@ dsos_t *create_cont(char *path, int perms)
 		exit(1);
 	}
 
+	printf("container created\n");
+
 	return cont;
+}
+
+void obj_cb(dsos_obj_t *obj, void *ctxt)
+{
+	int				ret;
+	pid_t				tid = 0;
+	uint64_t			i = (uintptr_t)ctxt;
+	dsosd_msg_obj_create_resp_t	*resp = (dsosd_msg_obj_create_resp_t *)obj->req->resp;
+
+//	tid = (pid_t)syscall(SYS_gettid);
+	if (!resp) {
+		printf("[%5d] obj %p ctxt %p no response from server\n", tid, obj, ctxt);
+		return;
+	}
+#if 0
+	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n", tid,
+	       i, obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
+	       resp->obj_id.serv, resp->obj_id.ods, resp->len);
+	fflush(stdout);
+#endif
+//	refs[i] = resp->obj_id.as_obj_ref;
+
+	if (!sequential)
+		dsos_obj_free(obj);
+	sem_post(&sem);
 }
 
 void do_obj_creates()
@@ -334,56 +352,54 @@ void do_obj_creates()
 	uint64_t	num;
 	char		*mydata;
 	dsos_obj_t	*obj;
+	struct timespec	end, elapsed;
+	uint64_t	nsecs;
 
 	mydata = malloc(4001);
-	refs = malloc(num_iters * sizeof(*refs));
+//	refs = malloc(num_iters * sizeof(*refs));
 	sem_init(&sem, 0, 0);
-	sem_init(&sem2, 0, 0);
 	num = num_iters * id;
+	clock_gettime(CLOCK_REALTIME, &beg);
+
 	for (i = 0; i < num_iters; ++i) {
 		obj = dsos_obj_alloc(schema, obj_cb, (void *)(uintptr_t)i);
 		if (!obj) {
-			fprintf(stderr, "could not create object");
+			fprintf(stderr, "could not create object %d", i);
 			exit(1);
 		}
+
 		sprintf(mydata, "seq=%08x", num);
 		sos_obj_attr_value_set(obj->sos_obj, attr_seq, num);
+		sos_obj_attr_value_set(obj->sos_obj, attr_int1, num);
+		sos_obj_attr_value_set(obj->sos_obj, attr_int2, num);
 		sos_obj_attr_value_set(obj->sos_obj, attr_hash, hash(mydata, 400));
 		sos_obj_attr_value_set(obj->sos_obj, attr_data, strlen(mydata)+1, mydata);
+		num += 1;
 
 		ret = dsos_obj_create(obj);
 		if (ret) {
 			fprintf(stderr, "dsos_obj_create %d\n", ret);
 			exit(1);
 		}
-		sem_wait(&sem);
-		printf("obj %d %d %s %d\n", num, num, mydata, hash(mydata,400));
-		num += 1;
 
-#if 0
-		ret = dsos_obj_index(obj, idx_cb, (void *)(uintptr_t)i);
-		if (ret) {
-			fprintf(stderr, "err %d indexing obj\n", ret);
-			exit(1);
+		if (sequential) {
+			sem_wait(&sem);
+			dsos_obj_free(obj);
 		}
-		sem_wait(&sem2);
-#endif
 
-		dsos_obj_free(obj);
+		if (progress && i && ((i % 50000) == 0))
+			print_elapsed(i);
 
-		nanosleep(&ts, NULL);
+//		nanosleep(&ts, NULL);
 	}
-#if 0
-	// Wait until all object-creation callbacks have occurred.
-	for (i = 0; i < num_iters; ++i)
-		sem_wait(&sem);
-#endif
-#if 0
-	printf("all objects created:\n");
-	for (i = 0; i < num_iters; ++i) {
-		printf("\t%08lx%08lx\n", refs[i]);
+
+	if (!sequential) {
+		// Wait until all object-creation callbacks have occurred.
+		for (i = 0; i < num_iters; ++i)
+			sem_wait(&sem);
 	}
-#endif
+
+	print_elapsed(num_iters);
 }
 
 void do_obj_finds()
@@ -440,7 +456,47 @@ void do_obj_iter()
 		++num;
 		if (--num_iters <= 0) break;
 	}
-	return;
+	dsos_iter_close(iter);
+}
+
+void do_obj_iter_finds()
+{
+	int		i;
+	uint64_t	num;
+	char		*mydata;
+	dsos_iter_t	*iter;
+	sos_key_t	key;
+	sos_obj_t	sos_obj;
+
+	iter = dsos_iter_new(schema, attr_seq);
+	if (!iter) {
+		printf("could not create iter\n");
+		exit(1);
+	}
+	printf("created dsos iter\n");
+	mydata = malloc(4000);
+	num = num_iters * id;
+	clock_gettime(CLOCK_REALTIME, &beg);
+	for (i = 0; i < num_iters; ++i) {
+		key = sos_key_for_attr(NULL, attr_seq, num);
+		sos_obj = dsos_iter_find(iter, key);
+		if (sos_obj) {
+			char buf1[16], buf2[32];
+			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
+			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
+			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+		} else {
+			printf("obj %d NOT FOUND\n", num);
+			break;
+		}
+		sos_obj_put(sos_obj);
+		++num;
+		if (progress && i && ((i % 50000) == 0))
+			print_elapsed(i);
+	}
+	print_elapsed(num_iters);
+	dsos_iter_close(iter);
 }
 
 uint64_t hash(void *buf, int len)
@@ -450,4 +506,29 @@ uint64_t hash(void *buf, int len)
 
 	while (len--) ret += *p++;
 	return ret;
+}
+
+void print_elapsed(int num_iters)
+{
+	struct timespec	cur, elapsed;
+	uint64_t	nsecs;
+
+	clock_gettime(CLOCK_REALTIME, &cur);
+
+	if ((cur.tv_nsec - beg.tv_nsec) < 0) {
+		elapsed.tv_sec  = cur.tv_sec - beg.tv_sec-1;
+		elapsed.tv_nsec = 1000000000 + cur.tv_nsec - beg.tv_nsec;
+	} else {
+		elapsed.tv_sec  = cur.tv_sec  - beg.tv_sec;
+		elapsed.tv_nsec = cur.tv_nsec - beg.tv_nsec;
+	}
+	nsecs = elapsed.tv_sec * 1000000000 + elapsed.tv_nsec;
+
+	printf("[%5d] %8d: %.0f objs/sec %.1f usecs/obj %.6f secs\n",
+	       getpid(),
+	       num_iters,
+	       num_iters/(nsecs/1000000000.0),
+	       (nsecs/1000.0)/num_iters,
+	       nsecs/1000000000.0);
+	fflush(stdout);
 }

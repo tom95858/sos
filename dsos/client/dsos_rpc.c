@@ -1,43 +1,65 @@
+/*
+ * A DSOS RPC has the following attributes:
+ *
+ * 1. It contacts
+ *    a. all servers,
+ *    b. a subset of servers, or
+ *    c. one server;
+ *
+ * 2. It is
+ *    a. synchronous, or
+ *    b. asynchronous; and
+ *
+ * 3. It takes input and output parameters packaged as rpc_<rpcName>_in_t and
+ *    rpc_<rpcName>_out_t structures and returns an int status.
+ *
+ * The RPC layer's job is to marshall the input parameters into one or
+ * more request messages to be sent to one or more servers, send the
+ * request, and either wait for the response or return after saving the
+ * request information in the message-send context(to be retrieved
+ * when the response message from the server arrives).
+ *
+ * The request is sent using the dsos_req_* API which supports sending
+ * to one server, a subset of servers, or all servers.
+ *
+ * Synchronous RPCs are implemented by waiting on a semaphore after
+ * the request message is submitted to the dsos_req_t layer via one of
+ * the dsos_req_submit APIs. The request is submitted along with a
+ * callback function which is called when the response message arrives
+ * from the server. Request and response are matched up using a unique
+ * 64-bit request identifier managed by the dsos_req_t layer. For
+ * requests to multiple servers, the callback is called upon receiving
+ * the response from the last server. The callback signals the
+ * semaphore. Note that the callback also must copy out any output
+ * parameters while the response message buffer is valid.  After the
+ * callback returns, the message is returned to Zap ownership and no
+ * longer is accessible.
+ *
+ * Asynchronous RPCs return immediately after the request is submitted.
+ * A callback function, specified when the request was submitted, is
+ * called when the response message arrives.  The callback can inspect
+ * the response and act accordingly.
+ */
+
 #include <string.h>
 #include "dsos_priv.h"
-
-static void rpc_signal_cb(dsos_req_t *req, size_t len, void *ctxt)
-{
-	dsosd_msg_t	*resp;
-
-	/*
-	 * The req->resp response buffer is invalid after this
-	 * function returns, so copy out the data here. The response
-	 * typically is small.
-	 */
-	if (req->resp && len) {
-		resp = (dsosd_msg_t *)malloc(len);
-		if (!resp)
-			dsos_fatal("out of memory\n");
-		memcpy(resp, req->resp, len);
-	} else
-		resp = NULL;
-
-	req->resp = resp;
-
-#ifdef DSOS_DEBUG
-	if (resp) {
-		dsos_debug("req %p len %d ctxt %p msg %p id %ld "
-			   "type %d status %d copied to %p\n",
-			   req, len, ctxt, req->msg, resp->u.hdr.id,
-			   resp->u.hdr.type, resp->u.hdr.status, resp);
-	} else {
-		dsos_debug("req %p len %d ctxt %p flushed\n",
-			   req, len, ctxt);
-	}
-#endif
-	sem_post(&req->sem);
-}
 
 static void rpc_all_signal_cb(dsos_req_all_t *req_all, void *ctxt)
 {
 	dsos_debug("req_all %p signaling\n", req_all);
 	sem_post(&req_all->sem);
+}
+
+static void rpc_ping_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	rpc_ping_out_t	*args_outp = ctxt;
+
+	args_outp->tot_num_connects    = req->resp->u.ping_resp.tot_num_connects;
+	args_outp->tot_num_disconnects = req->resp->u.ping_resp.tot_num_disconnects;
+	args_outp->tot_num_reqs        = req->resp->u.ping_resp.tot_num_reqs;
+	args_outp->num_clients         = req->resp->u.ping_resp.num_clients;
+
+	sem_post(&req->sem);
 }
 
 int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
@@ -47,7 +69,7 @@ int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
 	dsosd_msg_ping_req_t	*msg;
 	dsosd_msg_ping_resp_t	*resp;
 
-	req = dsos_req_new(rpc_signal_cb, NULL);
+	req = dsos_req_new(rpc_ping_cb, args_outp);
 	if (!req)
 		return ENOMEM;
 
@@ -64,7 +86,9 @@ int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
 
 	sem_wait(&req->sem);
 
-	return req->resp->u.hdr.status;
+	dsos_req_put(req);
+
+	return 0;
 }
 
 int dsos_rpc_ping_all(rpc_ping_in_t *args_inp, rpc_ping_out_t **args_outpp)
@@ -443,33 +467,45 @@ int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 {
 	int				server_id;
 	char				*obj_data;
-	size_t				obj_sz;
+	size_t				obj_sz, req_len;
 	dsos_obj_t			*obj;
+	dsos_req_t			*req;
 	dsosd_msg_obj_create_req_t	*msg;
-	size_t				req_len;
 	uint8_t				sha[SHA256_DIGEST_LENGTH];
 
-	obj = args_inp->obj;
+	obj     = args_inp->obj;
+	req     = obj->req;
+	req_len = sizeof(dsosd_msg_obj_create_req_t);
+
 	sos_obj_data_get(obj->sos_obj, &obj_data, &obj_sz);
 
 	/* Calculate the owning DSOS server. */
 	SHA256(obj_data, obj_sz, sha);
 	server_id = sha[0] % g.num_servers;
-	dsos_debug("obj %p obj_data %p obj_sz %d owned by server %d\n",
-		   obj, obj_data, obj_sz, server_id);
 
 	/*
-	 * Copy in args to the request message. If the object is in-line,
-	 * it already has been placed into msg by the application.
+	 * Copy in args to the request message. If the object fits into
+	 * the message, copy it and send it in-line.
 	 */
-	msg = (dsosd_msg_obj_create_req_t *)obj->req->msg;
+	msg = (dsosd_msg_obj_create_req_t *)req->msg;
 	msg->hdr.type      = DSOSD_MSG_OBJ_CREATE_REQ;
 	msg->hdr2.obj_sz   = obj_sz;
 	msg->schema_handle = obj->schema->handles[server_id];
 
-	req_len = sizeof(dsosd_msg_obj_create_req_t);
-	if (msg->hdr.flags & DSOSD_MSG_IMM)
+	if (obj_sz > (req->msg_len_max - sizeof(dsosd_msg_obj_create_req_t))) {
+		msg->hdr2.obj_va = (uint64_t)obj_data;
+	} else {
+		msg->hdr2.obj_va = 0;
+		msg->hdr.flags |= DSOSD_MSG_IMM;
+		obj->flags |= DSOS_OBJ_INLINE;
+		memcpy(msg->data, obj_data, obj_sz);
 		req_len += obj_sz;
+	}
+
+	dsos_debug("obj %p obj_data %p obj_sz %d%s owned by server %d\n",
+		   obj, obj_data, obj_sz,
+		   obj->flags & DSOS_OBJ_INLINE ? " inline" : "",
+		   server_id);
 
 	/* This can block until resources (SQ credits) are available. */
 	return dsos_req_submit(obj->req, &g.conns[server_id], req_len);
@@ -717,19 +753,45 @@ int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
 	return dsos_req_all_submit(req_all, 0);
 }
 
+static void rpc_obj_find_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	size_t				obj_sz;
+	char				*obj_data;
+	rpc_obj_find_out_t		*args_outp = ctxt;
+	dsosd_msg_obj_find_resp_t	*resp = (dsosd_msg_obj_find_resp_t *)req->resp;
+
+	sos_obj_data_get(args_outp->sos_obj, &obj_data, &obj_sz);
+
+	if (resp && resp->hdr.flags & DSOSD_MSG_IMM) {
+		memcpy(obj_data, resp->data, resp->hdr2.obj_sz);
+		dsos_debug("req %p len %d copied to obj_data %p\n", req, len, obj_data);
+	} else {
+		dsos_debug("req %p len %d flushed\n", req, len);
+	}
+
+	args_outp->status = resp->hdr.status;
+	args_outp->obj_id = resp->obj_id.as_obj_ref;
+
+	sem_post(&req->sem);
+}
+
 int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp)
 {
 	int				ret;
 	void				*key_data;
-	size_t				key_sz;
-	size_t				buf_len;
-	char				*buf, *p;
+	size_t				buf_len, key_sz, obj_sz;
+	char				*buf, *obj_data, *p;
 	dsos_req_t			*req;
 	dsosd_msg_obj_find_req_t	*msg;
 
-	req = dsos_req_new(rpc_signal_cb, NULL);
+	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
+
+	req = dsos_req_new(rpc_obj_find_cb, NULL);
 	if (!req)
 		return ENOMEM;
+
+	/* This is so the callback can see the object. */
+	args_outp->sos_obj = args_inp->sos_obj;
 
 	msg = (dsosd_msg_obj_find_req_t *)req->msg;
 	msg->hdr.type      = DSOSD_MSG_OBJ_FIND_REQ;
@@ -738,8 +800,8 @@ int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp
 	msg->cont_handle   = args_inp->cont_handle;
 	msg->schema_handle = args_inp->schema_handle;
 	msg->attr_id       = sos_attr_id(args_inp->attr);
-	msg->hdr2.obj_va   = args_inp->va;
-	msg->hdr2.obj_sz   = args_inp->len;
+	msg->hdr2.obj_va   = (uint64_t)obj_data;
+	msg->hdr2.obj_sz   = obj_sz;
 
 	key_sz   = sos_key_len(args_inp->key);
 	key_data = sos_key_value(args_inp->key);
@@ -763,26 +825,50 @@ int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp
 
 	sem_wait(&req->sem);
 
-	/* Copy out results from the response. */
-	if (req->resp->u.hdr.status) {
-		dsos_debug("status %d\n", req->resp->u.hdr.status);
-		return req->resp->u.hdr.status;
-	}
-	args_outp->obj_id = req->resp->u.obj_find_resp.obj_id.as_obj_ref;
-	dsos_debug("obj_id %08lx%08lx\n", args_outp->obj_id.ref.ods, args_outp->obj_id.ref.obj);
+	dsos_debug("obj_id %08lx%08lx status %d\n",
+		   args_outp->obj_id.ref.ods, args_outp->obj_id.ref.obj,
+		   args_outp->status);
 
 	return 0;
+}
+
+static void rpc_obj_get_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	size_t				obj_sz;
+	char				*obj_data;
+	rpc_obj_get_out_t		*args_outp = ctxt;
+	dsosd_msg_obj_get_resp_t	*resp = (dsosd_msg_obj_get_resp_t *)req->resp;
+
+	sos_obj_data_get(args_outp->sos_obj, &obj_data, &obj_sz);
+
+	if (resp && resp->hdr.flags & DSOSD_MSG_IMM) {
+		memcpy(obj_data, resp->data, resp->hdr2.obj_sz);
+		dsos_debug("req %p len %d copied to obj_data %p\n", req, len, obj_data);
+	} else {
+		dsos_debug("req %p len %d flushed\n", req, len);
+	}
+
+	args_outp->status = req->resp->u.hdr.status;
+
+	sem_post(&req->sem);
 }
 
 int dsos_rpc_obj_get(rpc_obj_get_in_t *args_inp, rpc_obj_get_out_t *args_outp)
 {
 	int			ret, server_num;
+	size_t			obj_sz;
+	char			*obj_data;
 	dsos_req_t		*req;
 	dsosd_msg_obj_get_req_t	*msg;
 
-	req = dsos_req_new(rpc_signal_cb, NULL);
+	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
+
+	req = dsos_req_new(rpc_obj_get_cb, args_outp);
 	if (!req)
 		return ENOMEM;
+
+	/* This is so the callback can see the object. */
+	args_outp->sos_obj = args_inp->sos_obj;
 
 	msg = (dsosd_msg_obj_get_req_t *)req->msg;
 	msg->hdr.type          = DSOSD_MSG_OBJ_GET_REQ;
@@ -790,11 +876,10 @@ int dsos_rpc_obj_get(rpc_obj_get_in_t *args_inp, rpc_obj_get_out_t *args_outp)
 	msg->hdr.status        = 0;
 	msg->cont_handle       = args_inp->cont_handle;
 	msg->obj_id.as_obj_ref = args_inp->obj_id;
-	msg->hdr2.obj_va       = args_inp->va;
-	msg->hdr2.obj_sz       = args_inp->len;
+	msg->hdr2.obj_va       = (uint64_t)obj_data;
+	msg->hdr2.obj_sz       = obj_sz;
 
-	ret = dsos_req_submit(req, &g.conns[msg->obj_id.serv],
-			      sizeof(dsosd_msg_obj_get_req_t));
+	ret = dsos_req_submit(req, &g.conns[msg->obj_id.serv], sizeof(dsosd_msg_obj_get_req_t));
 	if (ret) {
 		dsos_error("ret %d\n", ret);
 		return ret;
@@ -802,19 +887,9 @@ int dsos_rpc_obj_get(rpc_obj_get_in_t *args_inp, rpc_obj_get_out_t *args_outp)
 
 	sem_wait(&req->sem);
 
-	/* Copy out results from the response. */
-	if (req->resp->u.hdr.status) {
-		dsos_debug("status %d\n", req->resp->u.hdr.status);
-		return req->resp->u.hdr.status;
-	}
-	args_outp->obj_sz = req->resp->u.hdr2.obj_sz;
-
-	if (req->resp->u.hdr.flags & DSOSD_MSG_IMM)
-		memcpy((void *)args_inp->va, req->resp->u.obj_get_resp.data, args_outp->obj_sz);
-
-	dsos_debug("obj_id %08lx%08lx flags %x va %p sz %d\n",
+	dsos_debug("obj_id %08lx%08lx flags %x sos_obj %p status %d\n",
 		   args_inp->obj_id.ref.ods, args_inp->obj_id.ref.obj,
-		   req->resp->u.hdr.flags, args_inp->va, args_outp->obj_sz);
+		   req->resp->u.hdr.flags, args_outp->sos_obj, args_outp->status);
 
 	return 0;
 }
@@ -893,8 +968,10 @@ int dsos_rpc_iter_close(rpc_iter_close_in_t *args_inp, rpc_iter_close_out_t *arg
 int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_out_t *args_outp)
 {
 	int				i, ret;
-	size_t				obj_sz;
-	char				*obj_data;
+	size_t				buf_len, key_sz, obj_sz;
+	char				*buf, *obj_data, *p;
+	void				*key_data;
+	dsos_req_t			*req;
 	dsos_req_all_t			*req_all;
 	dsosd_msg_iterator_step_req_t	*msg;
 	dsosd_msg_iterator_step_resp_t	*resp;
@@ -904,23 +981,39 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
 
 	/* Copy in args to the request messages. */
+	if (args_inp->key) {
+		key_sz   = sos_key_len(args_inp->key);
+		key_data = sos_key_value(args_inp->key);
+	}
 	for (i = 0; i < g.num_servers; ++i) {
 		sos_obj_data_get(args_inp->sos_objs[i], &obj_data, &obj_sz);
-		msg = (dsosd_msg_iterator_step_req_t *)req_all->reqs[i]->msg;
+		req = req_all->reqs[i];
+		msg = (dsosd_msg_iterator_step_req_t *)req->msg;
 		msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
 		msg->op          = args_inp->op;
 		msg->iter_handle = args_inp->iter_handles[i];
 		msg->hdr2.obj_va = (uint64_t)obj_data;
 		msg->hdr2.obj_sz = obj_sz;
+		if (args_inp->key) {
+			// buf_len is what's available in the serialization buffer
+			buf_len = DSOSD_MSG_MAX_DATA - sizeof(dsosd_msg_iterator_step_req_t);
+			buf = msg->data;
+			serialize_uint32(key_sz, &buf, &buf_len);
+			serialize_buf(key_data, key_sz, &buf, &buf_len);
+			msg->data_len = buf - msg->data;
+		} else {
+			msg->data_len = 0;
+		}
+		req->msg_len = sizeof(dsosd_msg_iterator_step_req_t) + msg->data_len;
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_step_req_t));
+	ret = dsos_req_all_submit(req_all, 0);
 	if (ret)
 		return ret;
 
 	sem_wait(&req_all->sem);
 
-	/* Copy out statuses. No data to copy out. */
+	/* Copy out results. */
 	args_outp->found = (int *)calloc(g.num_servers, sizeof(int));
 	if (!args_outp->found)
 		return ENOMEM;
@@ -929,14 +1022,48 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 		resp = (dsosd_msg_iterator_step_resp_t *)req_all->reqs[i]->resp;
 		if (resp->hdr.status == 0) {
 			args_outp->found[i] = 1;
-			dsos_debug("obj from server %d\n", i);
-		}
-		else if (resp->hdr.status != ENOENT)
+			if (resp->hdr.flags & DSOSD_MSG_IMM) {
+				sos_obj_data_get(args_inp->sos_objs[i], &obj_data, &obj_sz);
+				memcpy(obj_data, resp->data, obj_sz);
+				dsos_debug("obj len %d from server %d inline\n", obj_sz, i);
+			} else {
+				dsos_debug("obj len %d from server %d\n", obj_sz, i);
+			}
+		} else if (resp->hdr.status != ENOENT) {
 			dsos_err_set(i, resp->hdr.status);
+			dsos_debug("err %d from server %d\n", resp->hdr.status, i);
+		}
 	}
 
 	dsos_req_all_put(req_all);
 	return dsos_err_status();
+}
+
+/*
+ * In this callback, the response message might contain an object, if
+ * it's small enough to fit in-line. Copy the object payload to the
+ * user's object. This must be done here because after this callback
+ * returns, the zap message buffer is invalid.
+ */
+static void rpc_step_one_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	size_t				obj_sz;
+	char				*obj_data;
+	rpc_iter_step_one_out_t		*args_outp = ctxt;
+	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
+
+	sos_obj_data_get(args_outp->sos_obj, &obj_data, &obj_sz);
+
+	if (resp && resp->hdr.flags & DSOSD_MSG_IMM) {
+		memcpy(obj_data, resp->data, resp->hdr2.obj_sz);
+		dsos_debug("req %p len %d copied to obj_data %p\n", req, len, obj_data);
+	} else {
+		dsos_debug("req %p len %d flushed\n", req, len);
+	}
+
+	args_outp->found = (resp->hdr.status == 0);
+
+	sem_post(&req->sem);
 }
 
 int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_out_t *args_outp)
@@ -950,7 +1077,10 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 
 	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
 
-	req = dsos_req_new(rpc_signal_cb, NULL);
+	req = dsos_req_new(rpc_step_one_cb, args_outp);
+
+	/* This is so the callback can see the object. */
+	args_outp->sos_obj = args_inp->sos_obj;
 
 	/* Copy in args to the request message. */
 	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
@@ -966,8 +1096,7 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 
 	sem_wait(&req->sem);
 
-	/* Copy out status. No data to copy out. */
-	args_outp->found = (req->resp->u.hdr.status == 0);
+	dsos_req_put(req);
 
 	return 0;
 }

@@ -94,11 +94,11 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 		req->ctxt = obj;
 #if 1
 		/*
-		 * We RMA into req->rma_buf for the moment. Once SOS is enhanced
-		 * to take a heap allocator, we can allocate the object in a
-		 * shared heap so the server can RMA-read it directly. Until
-		 * then, we RMA into a scratch buffer and then memcpy into the
-		 * object from that in the completion handler.
+		 * We RMA into req->rma_buf for the moment. Once SOS
+		 * is enhanced to map object memory, the server can
+		 * RMA-read it directly. Until then, we RMA into a
+		 * scratch buffer and then memcpy into the object from
+		 * that in the completion handler.
 		 */
 		req->rma_buf = mm_alloc(client->heap, msg->hdr2.obj_sz);
 		if (!req->rma_buf)
@@ -721,11 +721,22 @@ void rpc_handle_iterator_new(zap_ep_t ep, dsosd_msg_iterator_new_req_t *msg, siz
 
 void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, size_t len)
 {
-	int		ret;
+	int		key_len = 0, ret;
+	size_t		buf_len;
+	char		*buf, *key_data;
+	sos_key_t	key = NULL;
 	sos_iter_t	iter;
 	dsosd_req_t	*req;
 	sos_obj_t	sos_obj = NULL;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+	if (msg->data_len) {
+		buf     = msg->data;
+		buf_len = msg->data_len;
+		key_len = deserialize_buf(&key_data, &buf, &buf_len);
+		key     = sos_key_new(key_len);
+		sos_key_set(key, key_data, key_len);
+	}
 
 	iter = dsosd_handle_to_ptr(msg->iter_handle);
 	switch (msg->op) {
@@ -741,7 +752,11 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 	    case DSOSD_MSG_ITER_OP_PREV:
 		ret = sos_iter_prev(iter);
 		break;
+	    case DSOSD_MSG_ITER_OP_FIND:
+		ret = sos_iter_find(iter, key);
+		break;
 	    default:
+		ret = EINVAL;
 		break;
 	}
 	if (!ret) {
@@ -749,6 +764,9 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 		if (!sos_obj)
 			ret = ENOENT;
 	}
+	dsosd_debug("ep %d op %d iter %p key %p key_len %d ret %d\n", ep, msg->op,
+		    iter, key, key_len, ret);
+
 	if (sos_obj)
 		dsosd_req_complete_with_obj(ep, sos_obj, DSOSD_MSG_ITERATOR_STEP_RESP, msg);
 	else

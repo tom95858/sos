@@ -7,6 +7,7 @@
 #include <semaphore.h>
 #include <errno.h>
 #include <zap.h>
+#include <dsos/dsos.h>
 #include "sos_priv.h"
 #include "json_util.h"
 #include "mmalloc.h"
@@ -53,10 +54,8 @@ extern struct globals_s g;
  * into DSOS and lives throughout the request's lifetime to track its
  * state.
  */
-extern int *REQ_ALL_SERVERS;  // for vector req's
 enum {
-	REQ_VECTOR_MEMBER  = 0x00000001,
-	REQ_RESPONSE_RECVD = 0x00000002,
+	REQ_RESPONSE_COPIED = 0x00000001,
 };
 typedef void (*dsos_req_cb_t)(dsos_req_t *, size_t, void *);  // response callback fn
 typedef struct dsos_req_s {
@@ -154,8 +153,6 @@ typedef struct dsos_obj_s {
 	sos_obj_t		sos_obj;       // the actual SOS object
 	dsos_schema_t		*schema;
 	dsosd_objid_t		obj_id;        // global object id, valid once the resp comes in
-	// The following field is temporary until SOS can alloc objs from our shared heap.
-	char			*buf;          // pointer to data (shared heap or a send buffer)
 	dsos_req_t		*req;          // server req to create this obj
 	dsos_req_all_t		*req_all;      // server req(s) to index this obj
 	dsos_obj_cb_t		cb;            // response callback
@@ -299,12 +296,12 @@ typedef struct {
 	dsosd_handle_t	schema_handle;
 	sos_attr_t	attr;
 	sos_key_t	key;
-	uint64_t	va;
-	uint32_t	len;
+	sos_obj_t	sos_obj;
 } rpc_obj_find_in_t;
 typedef struct {
+	int		status;
 	sos_obj_ref_t	obj_id;
-	int		obj_sz;
+	sos_obj_t	sos_obj;
 } rpc_obj_find_out_t;
 int	dsos_rpc_obj_find(rpc_obj_find_in_t  *args_inp,
 			  rpc_obj_find_out_t *args_outp);
@@ -312,11 +309,11 @@ int	dsos_rpc_obj_find(rpc_obj_find_in_t  *args_inp,
 typedef struct {
 	dsosd_handle_t	cont_handle;
 	sos_obj_ref_t	obj_id;
-	uint64_t	va;
-	uint32_t	len;
+	sos_obj_t	sos_obj;
 } rpc_obj_get_in_t;
 typedef struct {
-	int		obj_sz;
+	int		status;
+	sos_obj_t	sos_obj;
 } rpc_obj_get_out_t;
 int	dsos_rpc_obj_get(rpc_obj_get_in_t  *args_inp,
 			 rpc_obj_get_out_t *args_outp);
@@ -347,6 +344,7 @@ typedef struct {
 } rpc_iter_step_one_in_t;
 typedef struct {
 	int		found;
+	sos_obj_t	sos_obj;
 } rpc_iter_step_one_out_t;
 int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
 			       rpc_iter_step_one_out_t *args_outp);
@@ -354,6 +352,7 @@ int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
 typedef struct {
 	dsosd_handle_t	*iter_handles;
 	int		op;
+	sos_key_t	key;
 	sos_obj_t	*sos_objs;
 } rpc_iter_step_all_in_t;
 typedef struct {
@@ -387,22 +386,6 @@ void		*dsos_rpc_serialize_schema_template(sos_schema_template_t templ, void *buf
 sos_schema_template_t dsos_rpc_deserialize_schema_template(char *buf, size_t len);
 void		*dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz);
 
-/* Public API. */
-int		dsos_container_close(dsos_t *dsos);
-dsos_t		*dsos_container_open(const char *path, sos_perm_t perms);
-void		dsos_disconnect(void);
-int		dsos_init(const char *config_filename);
-sos_obj_t	dsos_iter_begin(dsos_iter_t *iter);
-int		dsos_iter_close(dsos_iter_t *iter);
-dsos_iter_t	*dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr);
-sos_obj_t	dsos_iter_next(dsos_iter_t *iter);
-dsos_obj_t	*dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt);
-int		dsos_obj_create(dsos_obj_t *obj);
-sos_obj_t	dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key);
-int		dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt);
-int		dsos_ping(int server_num);
-dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
-
 #define dsos_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsos_error(fmt, ...)	sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsos_fatal(fmt, ...) \
@@ -411,6 +394,7 @@ dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
 			__ods_log_fp = stderr;					\
 		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
+		sleep(1);							\
 		exit(1);							\
 	} while (0);
 

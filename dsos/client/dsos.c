@@ -93,7 +93,9 @@ int dsos_init(const char *config_filename)
 		conn = &g.conns[i];
 		zerr = zap_map(conn->ep, &conn->map, g.heap_buf, g.opts.heap_sz, ZAP_ACCESS_READ);
 		zerr = zerr || zap_share(conn->ep, conn->map, NULL, 0);
-		dsos_err_set(i, ret);
+		dsos_err_set(i, zerr);
+		dsos_debug("heap %p/%d has map %p for server %d\n",
+			   g.heap_buf, g.opts.heap_sz, conn->map, i);
 	}
 	if (dsos_err_status())
 		return EREMOTE;

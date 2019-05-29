@@ -2,14 +2,24 @@
 
 static int iter_rbn_cmp_fn(void *tree_key, void *key);
 
-int dsos_ping(int server_num)
+int dsos_ping(int server_num, struct dsos_ping_stats *stats)
 {
+	int			ret;
 	rpc_ping_in_t		args_in;
 	rpc_ping_out_t		args_out;
 
 	args_in.server_num = server_num;
 
-	return dsos_rpc_ping(&args_in, &args_out);
+	ret = dsos_rpc_ping(&args_in, &args_out);
+
+	if (!ret && stats) {
+		stats->tot_num_connects    = args_out.tot_num_connects;
+		stats->tot_num_disconnects = args_out.tot_num_disconnects;
+		stats->tot_num_reqs        = args_out.tot_num_reqs;
+		stats->num_clients         = args_out.num_clients;
+	}
+
+	return ret;
 }
 
 int dsos_container_new(const char *path, int mode)
@@ -175,136 +185,6 @@ int dsos_part_state_set(dsos_part_t *part, sos_part_state_t new_state)
 	return dsos_rpc_part_set_state(&args_in, &args_out);
 }
 
-static int attr_value_to_server(sos_value_t v)
-{
-	uint8_t		sha[SHA256_DIGEST_LENGTH];
-	size_t		sz = sos_value_size(v);
-
-	if (sos_value_is_array(v))
-		SHA256((const unsigned char *)&v->data->array.data, sz, sha);
-	else
-		SHA256((const unsigned char *)&v->data->prim, sz, sha);
-
-	return sha[0] % g.num_servers;
-}
-
-int dsos_obj_index(dsos_obj_t *obj, dsos_obj_cb_t cb, void *ctxt)
-{
-	int			i, ret, server_num;
-	size_t			len;
-	sos_attr_t		attr;
-	sos_value_t		v;
-	sos_schema_t		schema;
-	dsos_req_t		**reqs;
-	rpc_obj_index_in_t	*args_in;
-
-	dsos_debug("obj %p cb %p/%p\n", obj, cb, ctxt);
-
-	if (!obj->sos_obj || !(obj->flags & DSOS_OBJ_CREATED))
-		return ENOENT;
-
-	obj->cb   = cb;
-	obj->ctxt = ctxt;
-
-	schema = sos_obj_schema(obj->sos_obj);
-
-	args_in = (rpc_obj_index_in_t *)malloc(g.num_servers * sizeof(rpc_obj_index_in_t));
-	if (!args_in) {
-		ret = ENOMEM;
-		goto out;
-	}
-
-	for (i = 0; i < g.num_servers; ++i) {
-		args_in[i].server_num = i;
-		args_in[i].obj        = obj;
-		args_in[i].num_attrs  = 0;
-		args_in[i].attrs = calloc(sos_schema_attr_count(schema), sizeof(sos_value_t));
-		if (!args_in[i].attrs) {
-			ret = ENOMEM;
-			goto out;
-		}
-	}
-
-	for (i = 0; i < sos_schema_attr_count(schema); ++i) {
-		attr = sos_schema_attr_by_id(schema, i);
-		if (!attr->data_.indexed)
-			continue;
-		v = sos_value(obj->sos_obj, attr);
-		server_num = attr_value_to_server(v);
-		args_in[server_num].attrs[args_in[server_num].num_attrs++] = v;
-		dsos_debug("attr %s (%d) of %d to server %d\n", sos_attr_name(attr),
-			   i, args_in[server_num].num_attrs, server_num);
-	}
-
-	ret = dsos_rpc_obj_index(args_in);
- out:
-	if (ret && obj->cb)
-		obj->cb(obj, obj->ctxt);
-
-	for (i = 0; i < g.num_servers; ++i)
-		free(args_in[i].attrs);
-	free(args_in);
-
-	return ret;
-}
-
-sos_obj_t dsos_obj_find(dsos_schema_t *schema, sos_attr_t attr, sos_key_t key)
-{
-	int			ret, server_num;
-	size_t			key_sz, obj_sz;
-	char			*key_data, *obj_data;
-	sos_obj_t		sos_obj;
-	uint8_t			sha[SHA256_DIGEST_LENGTH];
-	rpc_obj_find_in_t	args_in_find;
-	rpc_obj_find_out_t	args_out_find;
-	rpc_obj_get_in_t	args_in_get;
-	rpc_obj_get_out_t	args_out_get;
-
-	key_sz   = sos_key_len(key);
-	key_data = sos_key_value(key);
-
-	SHA256((const unsigned char *)key_data, key_sz, sha);
-	server_num = sha[0] % g.num_servers;
-
-	sos_obj = sos_obj_malloc(schema->sos_schema);
-	if (!sos_obj) {
-		dsos_error("could not allocate sos_obj\n");
-		return NULL;
-	}
-	sos_obj_data_get(sos_obj, &obj_data, &obj_sz);
-
-	args_in_find.server_num    = server_num;
-	args_in_find.cont_handle   = schema->cont->handles[server_num];
-	args_in_find.schema_handle = schema->handles[server_num];
-	args_in_find.attr          = attr;
-	args_in_find.key           = key;
-	args_in_find.va            = (uint64_t)obj_data;
-	args_in_find.len           = obj_sz;
-
-	ret = dsos_rpc_obj_find(&args_in_find, &args_out_find);
-	if (ret)
-		return NULL;
-
-	dsos_debug("obj_id %08lx%08lx\n",
-		   args_out_find.obj_id.ref.ods, args_out_find.obj_id.ref.obj);
-
-	// XXX Bo: optimize case where the server owning the index also owns the obj.
-
-	args_in_get.cont_handle = schema->cont->handles[args_out_find.obj_id.ref.ods];
-	args_in_get.obj_id      = args_out_find.obj_id;
-	args_in_get.va          = (uint64_t)obj_data;
-	args_in_get.len         = obj_sz;
-
-	ret = dsos_rpc_obj_get(&args_in_get, &args_out_get);
-	if (ret)
-		return NULL;
-
-	dsos_debug("obj_id %08lx%08lx sos_obj %p\n",
-		   args_out_find.obj_id.ref.ods, args_out_find.obj_id.ref.obj, sos_obj);
-
-	return sos_obj;
-}
-
 dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
 {
 	int			i, ret;
@@ -383,6 +263,13 @@ static void iter_rbt_insert(dsos_iter_t *iter, sos_value_t v, int server_num)
 	dsos_debug("iter %p inserted value %ld\n", iter, v->data->prim.uint64_);
 }
 
+static void iter_insert_obj(dsos_iter_t *iter, int server_num)
+{
+	iter_rbt_insert(iter,
+			sos_value(iter->sos_objs[server_num], iter->attr),
+			server_num);
+}
+
 static int iter_rbt_min(dsos_iter_t *iter)
 {
 	int		ret = -1;
@@ -396,13 +283,6 @@ static int iter_rbt_min(dsos_iter_t *iter)
 	}
 	dsos_debug("iter %p server_num %d\n", iter, ret);
 	return ret;
-}
-
-static void iter_insert_obj(dsos_iter_t *iter, int server_num)
-{
-	iter_rbt_insert(iter,
-			sos_value(iter->sos_objs[server_num], iter->attr),
-			server_num);
 }
 
 static sos_obj_t iter_remove_min(dsos_iter_t *iter)
@@ -422,17 +302,26 @@ static sos_obj_t iter_remove_min(dsos_iter_t *iter)
 	return sos_obj;
 }
 
+static void iter_reset(dsos_iter_t *iter)
+{
+	sos_obj_t	sos_obj;
+
+	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
+	while (sos_obj = iter_remove_min(iter))
+		sos_obj_put(sos_obj);
+	iter->done      = 0;
+	iter->last_srvr = -1;
+}
+
 sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 {
 	int			i, ret;
-	size_t			obj_sz;
-	char			*obj_data;
 	rpc_iter_step_all_in_t	args_in;
 	rpc_iter_step_all_out_t	args_out;
 
+	iter_reset(iter);
+
 	for (i = 0; i < g.num_servers; ++i) {
-		if (iter->sos_objs[i])
-			sos_obj_put(iter->sos_objs[i]);
 		iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
 		if (!iter->sos_objs[i])
 			return NULL;
@@ -441,6 +330,7 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 	args_in.op           = DSOSD_MSG_ITER_OP_BEGIN;
 	args_in.iter_handles = iter->handles;
 	args_in.sos_objs     = iter->sos_objs;
+	args_in.key          = NULL;
 
 	ret = dsos_rpc_iter_step_all(&args_in, &args_out);
 	if (ret)
@@ -458,8 +348,6 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 {
 	int			ret, server_num;
-	size_t			obj_sz;
-	char			*obj_data;
 	rpc_iter_step_one_in_t	args_in;
 	rpc_iter_step_one_out_t	args_out;
 
@@ -485,6 +373,38 @@ sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 
 	if (args_out.found)
 		iter_insert_obj(iter, server_num);
+
+	return iter_remove_min(iter);
+}
+
+sos_obj_t dsos_iter_find(dsos_iter_t *iter, sos_key_t key)
+{
+	int			i, ret;
+	rpc_iter_step_all_in_t	args_in;
+	rpc_iter_step_all_out_t	args_out;
+
+	iter_reset(iter);
+
+	for (i = 0; i < g.num_servers; ++i) {
+		iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
+		if (!iter->sos_objs[i])
+			return NULL;
+	}
+
+	args_in.op           = DSOSD_MSG_ITER_OP_FIND;
+	args_in.iter_handles = iter->handles;
+	args_in.sos_objs     = iter->sos_objs;
+	args_in.key          = key;
+
+	ret = dsos_rpc_iter_step_all(&args_in, &args_out);
+	if (ret)
+		return NULL;
+
+	for (i = 0; i < g.num_servers; ++i) {
+		if (args_out.found[i])
+			iter_insert_obj(iter, i);
+	}
+	free(args_out.found);
 
 	return iter_remove_min(iter);
 }

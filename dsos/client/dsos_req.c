@@ -1,18 +1,55 @@
+/*
+ * The DSOS request layer sends messages to one or more servers and
+ * matches them up with response messages that later arrive.  It is used
+ * by the RPC layer. A message is a 2k-byte buffer of formatted data
+ * represented as a large union of C structures in dsos/server/dsos_msg_layout.h.
+ * The RPC parameters are marshalled in and out of these messages.
+ *
+ * To send a message to a single server, a request is first allocated:
+ *
+ *   dsos_req_t *req = dsos_req_new(callback_fn, ctxt);
+ *
+ * By requiring allocation, this layer can support transports that
+ * directly provide their buffers, thereby avoiding a copy. Then the
+ * message can be accessed:
+ *
+ *   dsos_msg_t *msg = req->msg;
+ *   msg->hdr.type = DSOS_PING_REQ;
+ *   // fill in remaining message fields...
+ *
+ * Once the message has been formatted, it can be sent:
+ *
+ *   // conn is the connection object for the destination server
+ *   err = dsos_req_submit(req, conn, len);
+ *
+ * The send is asynchronous. The DSOS server destined for the message
+ * will send a response message which contains the same 64-bit message ID
+ * as the request. This layer uses a red-black tree to match up these
+ * IDs. It is an error for a response message to be received that cannot
+ * be matched with a request message.
+ *
+ * When the response message arrives, the callback specified in
+ * the dsos_req_new call is called:
+ *
+ *   void my_callback(dsos_req_t *req, size_t len, void *ctxt);
+ *
+ * The response message is in req->resp.
+ *
+ * The request object must be freed when no longer needed:
+ *
+ *   dsos_req_put(req);
+ *
+ * Requests to multiple servers are similar -- a dsos_req_all_t is first
+ * allocated, then individual requests to one or more servers can be
+ * accessed, then submitted. When submitted, one or more messages are
+ * sent out. Response messages are matched up and an internal callback
+ * counts them and when the last one is received, the callback specified
+ * in the dsos_req_all_new() call is called.
+ */
+
 #include <assert.h>
 #include <errno.h>
 #include "dsos_priv.h"
-
-/*
- * Requests (dsos_req_t) are created when the user calls into DSOS
- * and a message is sent to a DSOS server to carry out the request.
- * Each request is assigned a client-unique 64-bit integer id which
- * is reflected back by the server in its response. This lets us
- * map the response message back to the original request.
- *
- * An N-fanout request (dsos_req_all_t) is a request vector used to
- * implement RPCs to all DSOS servers. These are always slow-path
- * operations like opening a container.
- */
 
 static struct rbt	req_rbt;
 static pthread_mutex_t	req_rbt_lock;
@@ -97,8 +134,6 @@ int dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len)
 	 * it will be a zap send buffer that must not be touched after the zap_send
 	 * is posted.
 	 */
-	free(req->msg);
-	req->msg = NULL;
 
 	return zerr;
 }
@@ -106,7 +141,7 @@ int dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len)
 dsos_req_t *dsos_req_find(dsosd_msg_t *resp)
 {
 	struct req_rbn	*rbn;
-	dsos_req_t	*req = NULL;
+	dsos_req_t	*req;
 
 	pthread_mutex_lock(&req_rbt_lock);
 	rbn = (struct req_rbn *)rbt_find(&req_rbt, (void *)resp->u.hdr.id);
@@ -116,10 +151,13 @@ dsos_req_t *dsos_req_find(dsosd_msg_t *resp)
 		req->resp = resp;
 		rbt_del(&req_rbt, (struct rbn *)rbn);
 		free(rbn);
+		pthread_mutex_unlock(&req_rbt_lock);
 		sem_post(&req->conn->flow_sem);
+		return req;
+	} else {
+		pthread_mutex_unlock(&req_rbt_lock);
+		return NULL;
 	}
-	pthread_mutex_unlock(&req_rbt_lock);
-	return req;
 }
 
 void dsos_req_get(dsos_req_t *req)
@@ -133,8 +171,6 @@ void dsos_req_put(dsos_req_t *req)
 		dsos_debug("req %p msg %p resp %p freed\n", req, req->msg, req->resp);
 		if (req->msg)
 			free(req->msg);
-		if (req->resp && (req->flags & (REQ_VECTOR_MEMBER | REQ_RESPONSE_RECVD)))
-			free(req->resp);
 		free(req);
 	}
 }
@@ -159,10 +195,8 @@ dsos_req_all_t *dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt)
 	req_all->reqs          = reqs;
 	req_all->num_reqs_pend = 0;
 	sem_init(&req_all->sem, 0, 0);
-	for (i = 0; i < g.num_servers; ++i) {
+	for (i = 0; i < g.num_servers; ++i)
 		req_all->reqs[i] = dsos_req_new(req_all_cb, req_all);
-		req_all->reqs[i]->flags |= REQ_VECTOR_MEMBER;
-	}
 
 	dsos_debug("req_all %p\n", req_all);
 
@@ -208,7 +242,6 @@ dsos_req_t *dsos_req_all_add_server(dsos_req_all_t *req_all, int server_num)
 	req_all->reqs[server_num] = dsos_req_new(req_all_cb, req_all);
 	if (!req_all->reqs[server_num])
 		dsos_fatal("out of memory\n");
-	req_all->reqs[server_num]->flags |= REQ_VECTOR_MEMBER;
 	return req_all->reqs[server_num];
 }
 
@@ -255,9 +288,6 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 {
 	dsosd_msg_t	*resp;
 	dsos_req_all_t	*req_all = (dsos_req_all_t *)ctxt;
-
-	assert((req->flags & REQ_RESPONSE_RECVD) == 0);
-	req->flags |= REQ_RESPONSE_RECVD;
 
 	/*
 	 * The req->resp response buffer is invalid after this function
