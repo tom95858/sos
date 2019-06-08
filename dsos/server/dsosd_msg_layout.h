@@ -36,6 +36,7 @@ typedef struct {
 #define DSOSD_MSG_MAX_PATH	128   // len of fixed-size char arrays in msgs
 #define DSOSD_MSG_MAX_DATA	1900  // conservative len of in-line data array
 
+/* Message types. */
 enum {
 	DSOSD_MSG_INVALID = 0,        // indicates no msg for a server in a vector RPC
 	DSOSD_MSG_PING_REQ,
@@ -52,6 +53,8 @@ enum {
 	DSOSD_MSG_CONTAINER_NEW_RESP,
 	DSOSD_MSG_CONTAINER_OPEN_REQ,
 	DSOSD_MSG_CONTAINER_OPEN_RESP,
+	DSOSD_MSG_CONTAINER_DELETE_REQ,
+	DSOSD_MSG_CONTAINER_DELETE_RESP,
 	DSOSD_MSG_CONTAINER_CLOSE_REQ,
 	DSOSD_MSG_CONTAINER_CLOSE_RESP,
 	DSOSD_MSG_ITERATOR_CLOSE_REQ,
@@ -74,6 +77,7 @@ enum {
 	DSOSD_MSG_SCHEMA_BY_NAME_RESP,
 };
 
+/* Message flags. */
 enum {
 	DSOSD_MSG_IMM  = 0x00000001,
 };
@@ -99,7 +103,7 @@ typedef struct dsosd_msg_hdr2 {
 
 typedef struct dsosd_msg_ping_req {
 	dsosd_msg_hdr_t		hdr;
-	char			data[];
+	uint32_t		dump;
 } dsosd_msg_ping_req_t;
 
 typedef struct dsosd_msg_ping_resp {
@@ -131,6 +135,15 @@ typedef struct dsosd_msg_container_open_resp {
 	dsosd_msg_hdr_t		hdr;
 	dsosd_handle_t		handle;
 } dsosd_msg_container_open_resp_t;
+
+typedef struct dsosd_msg_container_delete_req {
+	dsosd_msg_hdr_t		hdr;
+	char			path[DSOSD_MSG_MAX_PATH];
+} dsosd_msg_container_delete_req_t;
+
+typedef struct dsosd_msg_container_delete_resp {
+	dsosd_msg_hdr_t		hdr;
+} dsosd_msg_container_delete_resp_t;
 
 typedef struct dsosd_msg_container_close_req {
 	dsosd_msg_hdr_t		hdr;
@@ -317,6 +330,8 @@ typedef struct dsosd_msg {
 		dsosd_msg_container_close_resp_t	container_close_resp;
 		dsosd_msg_container_new_req_t		container_new_req;
 		dsosd_msg_container_new_resp_t		container_new_resp;
+		dsosd_msg_container_delete_req_t	container_delete_req;
+		dsosd_msg_container_delete_resp_t	container_delete_resp;
 		dsosd_msg_container_open_req_t		container_open_req;
 		dsosd_msg_container_open_resp_t		container_open_resp;
 		dsosd_msg_iterator_close_req_t		iterator_close_req;

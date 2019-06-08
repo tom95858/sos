@@ -73,10 +73,7 @@ int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
 	if (!req)
 		return ENOMEM;
 
-	msg = (dsosd_msg_ping_req_t *)req->msg;
-	msg->hdr.type      = DSOSD_MSG_PING_REQ;
-	msg->hdr.flags     = 0;
-	msg->hdr.status    = 0;
+	req->msg->u.hdr.type = DSOSD_MSG_PING_REQ;
 
 	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_ping_req_t));
 	if (ret) {
@@ -91,43 +88,60 @@ int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
 	return 0;
 }
 
+static uint64_t nsecs_now()
+{
+	struct timespec	ts;
+
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return ts.tv_sec * 1.0e+9 + ts.tv_nsec;
+}
+
+static void rpc_ping_all_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	dsosd_msg_ping_resp_t	*resp = (dsosd_msg_ping_resp_t *)req->resp;
+	rpc_ping_out_t		*args_outp = (rpc_ping_out_t *)ctxt;
+	int			server_num = req->conn->server_id;
+
+	args_outp[server_num].tot_num_connects    = resp->tot_num_connects;
+	args_outp[server_num].tot_num_disconnects = resp->tot_num_disconnects;
+	args_outp[server_num].tot_num_reqs        = resp->tot_num_reqs;
+	args_outp[server_num].num_clients         = resp->num_clients;
+	args_outp[server_num].nsecs               = nsecs_now() - args_outp[server_num].nsecs;
+
+	dsos_err_set(server_num, resp->hdr.status);
+
+	if (!ods_atomic_dec(&req->req_all->num_reqs_pend))
+		sem_post(&req->req_all->sem);
+}
+
 int dsos_rpc_ping_all(rpc_ping_in_t *args_inp, rpc_ping_out_t **args_outpp)
 {
 	int			i, ret;
+	uint64_t		now;
 	dsos_req_all_t		*req_all;
-	dsosd_msg_ping_req_t	*msg;
-	dsosd_msg_ping_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_ping_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type = DSOSD_MSG_PING_REQ;
-		strcpy(msg->data, "ping");
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_ping_req_t) + 5);
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
-
-	/* Copy out results from the responses. Caller must free. */
 	*args_outpp = (rpc_ping_out_t *)malloc(sizeof(rpc_ping_out_t) * g.num_servers);
 	if (!args_outpp)
 		dsos_fatal("out of memory\n");
 	dsos_err_clear();
+
+	req_all = dsos_req_all_async_new(rpc_ping_all_cb, *args_outpp);
+
+	/* Copy in args to the request messages. */
+	now = nsecs_now();
 	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_ping_resp_t *)req_all->reqs[i]->resp;
-		(*args_outpp)[i].tot_num_connects    = resp->tot_num_connects;
-		(*args_outpp)[i].tot_num_disconnects = resp->tot_num_disconnects;
-		(*args_outpp)[i].tot_num_reqs        = resp->tot_num_reqs;
-		(*args_outpp)[i].num_clients         = resp->num_clients;
-		dsos_err_set(i, resp->hdr.status);
+		req_all->reqs[i]->msg->u.hdr.type = DSOSD_MSG_PING_REQ;
+		req_all->reqs[i]->msg->u.ping_req.dump = args_inp->dump;
+		(*args_outpp)[i].nsecs = now;
 	}
 
+	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_ping_req_t));
+	if (ret)
+		return ret;
+
+	sem_wait(&req_all->sem);
 	dsos_req_all_put(req_all);
+
 	return dsos_err_status();
 }
 
@@ -198,6 +212,40 @@ int dsos_rpc_container_open(rpc_container_open_in_t  *args_inp,
 	for (i = 0; i < g.num_servers; ++i) {
 		resp = (dsosd_msg_container_open_resp_t *)req_all->reqs[i]->resp;
 		args_outp->handles[i] = resp->handle;
+		dsos_err_set(i, resp->hdr.status);
+	}
+
+	dsos_req_all_put(req_all);
+	return dsos_err_status();
+}
+
+int dsos_rpc_container_delete(rpc_container_delete_in_t  *args_inp,
+			      rpc_container_delete_out_t *args_outp)
+{
+	int					i, ret;
+	dsos_req_all_t				*req_all;
+	dsosd_msg_container_delete_req_t	*msg;
+	dsosd_msg_container_delete_resp_t	*resp;
+
+	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+
+	/* Copy in args to the request messages. */
+	for (i = 0; i < g.num_servers; ++i) {
+		msg = (dsosd_msg_container_delete_req_t *)req_all->reqs[i]->msg;
+		msg->hdr.type = DSOSD_MSG_CONTAINER_DELETE_REQ;
+		strncpy(msg->path, args_inp->path, sizeof(msg->path));
+	}
+
+	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_container_delete_req_t));
+	if (ret)
+		return ret;
+
+	sem_wait(&req_all->sem);
+
+	/* Copy out statuses. No data to copy out. */
+	dsos_err_clear();
+	for (i = 0; i < g.num_servers; ++i) {
+		resp = (dsosd_msg_container_delete_resp_t *)req_all->reqs[i]->resp;
 		dsos_err_set(i, resp->hdr.status);
 	}
 

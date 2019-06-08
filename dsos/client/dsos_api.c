@@ -22,6 +22,30 @@ int dsos_ping(int server_num, struct dsos_ping_stats *stats)
 	return ret;
 }
 
+int dsos_ping_all(struct dsos_ping_stats **statsp, int dump)
+{
+	int			i, ret;
+	rpc_ping_in_t		args_in;
+	rpc_ping_out_t		*args_outp;
+
+	args_in.dump = dump;
+	ret = dsos_rpc_ping_all(&args_in, &args_outp);
+
+	if (!ret && statsp) {
+		*statsp = (struct dsos_ping_stats *)malloc(sizeof(struct dsos_ping_stats) * g.num_servers);
+		for (i = 0; i < g.num_servers; ++i) {
+			(*statsp)[i].tot_num_connects    = args_outp[i].tot_num_connects;
+			(*statsp)[i].tot_num_disconnects = args_outp[i].tot_num_disconnects;
+			(*statsp)[i].tot_num_reqs        = args_outp[i].tot_num_reqs;
+			(*statsp)[i].num_clients         = args_outp[i].num_clients;
+			(*statsp)[i].nsecs               = args_outp[i].nsecs;
+		}
+	}
+	free(args_outp);
+
+	return ret;
+}
+
 int dsos_container_new(const char *path, int mode)
 {
 	rpc_container_new_in_t		args_in;
@@ -53,6 +77,16 @@ dsos_t *dsos_container_open(const char *path, sos_perm_t perms)
 	cont->handles = args_out.handles;
 
 	return cont;
+}
+
+int dsos_container_delete(const char *path)
+{
+	rpc_container_delete_in_t	args_in;
+	rpc_container_delete_out_t	args_out;
+
+	strncpy(args_in.path, path, sizeof(args_in.path));
+
+	return dsos_rpc_container_delete(&args_in, &args_out);
 }
 
 int dsos_container_close(dsos_t *cont)
@@ -240,13 +274,6 @@ int dsos_iter_close(dsos_iter_t *iter)
 
 static int iter_rbn_cmp_fn(void *tree_key, void *key)
 {
-	sos_value_t v1 = (sos_value_t)tree_key;
-	sos_value_t v2 = (sos_value_t)tree_key;
-	int ret = sos_value_cmp(v1,v2);
-
-	dsos_debug("v1 %ld v2 %ld cmp %d\n",
-		   v1->data->prim.uint64_, v2->data->prim.uint64_, ret);
-
 	return sos_value_cmp((sos_value_t)tree_key, (sos_value_t)key);
 }
 

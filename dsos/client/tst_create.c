@@ -19,9 +19,10 @@ int		sleep_msec = 0;
 int		lookup = 0;
 int		progress = 0;
 int		sequential = 0;
+int		local = 0;
 int		server_num;
+struct timespec	ts;
 uint8_t		id;
-struct timespec	beg, ts;
 uint64_t	nsecs;
 sem_t		sem;
 sem_t		sem2;
@@ -36,9 +37,11 @@ void		do_obj_finds();
 void		do_obj_iter();
 void		do_obj_iter_finds();
 void		do_init();
+void		do_local();
 void		do_ping();
 dsos_t		*create_cont(char *path, int perms);
-void		print_elapsed(int num_iters);
+void		print_elapsed(int num_iters_interval, int num_iters_tot,
+			      struct timespec beg, struct timespec last);
 
 void usage(char *av[])
 {
@@ -64,6 +67,7 @@ int main(int ac, char *av[])
 		{ "ping",       required_argument, NULL, 'p' },
 		{ "progress",   no_argument,       NULL, 'g' },
 		{ "sequential", no_argument,       NULL, 'q' },
+		{ "local",      no_argument,       NULL, 'u' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ 0,		0,		   0,     0  }
@@ -93,6 +97,9 @@ int main(int ac, char *av[])
 		    case 'q':
 			sequential = 1;
 			break;
+		    case 'u':
+			local = 1;
+			break;
 		    case 'p':
 			ping = 1;
 			server_num = atoi(optarg);
@@ -108,6 +115,12 @@ int main(int ac, char *av[])
 			exit(0);
 		}
 	}
+
+	if (local) {
+		do_local();
+		return 0;
+	}
+
 	if (!config) {
 		fprintf(stderr, "must specify --config\n");
 		usage(av);
@@ -120,8 +133,11 @@ int main(int ac, char *av[])
 	ts.tv_nsec = nsecs % 1000000000;
 
 	if (dsos_init(config)) {
-		fprintf(stderr, "could not establish connections to all DSOS servers\n");
-		exit(1);
+		fprintf(stderr, "could not establish all DSOS server connections: \n");
+		for (i = 0; i < g.num_servers; ++i)
+			fprintf(stderr, "%d ", dsos_err_get()[i]);
+		fprintf(stderr, "\n");
+		return 1;
 	}
 
 	if (ping) {
@@ -153,8 +169,10 @@ void do_ping()
 	int			i, ret;
 	uint64_t		nsecs;
 	struct dsos_ping_stats	stats;
+	struct timespec		beg, last;
 
 	clock_gettime(CLOCK_REALTIME, &beg);
+	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
 		ret = dsos_ping(server_num, &stats);
 		if (ret) {
@@ -168,10 +186,11 @@ void do_ping()
 			       stats.tot_num_disconnects,
 			       stats.tot_num_reqs,
 			       stats.num_clients);
-			print_elapsed(i);
+			print_elapsed(50000, i, beg, last);
+			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	print_elapsed(num_iters);
+	print_elapsed(50000, num_iters, beg, last);
 }
 
 void do_init()
@@ -334,15 +353,14 @@ void obj_cb(dsos_obj_t *obj, void *ctxt)
 		return;
 	}
 #if 0
-	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n", tid,
-	       i, obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
+	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n",
+	       tid, i,
+	       obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
 	       resp->obj_id.serv, resp->obj_id.ods, resp->len);
 	fflush(stdout);
 #endif
 //	refs[i] = resp->obj_id.as_obj_ref;
 
-	if (!sequential)
-		dsos_obj_free(obj);
 	sem_post(&sem);
 }
 
@@ -352,14 +370,14 @@ void do_obj_creates()
 	uint64_t	num;
 	char		*mydata;
 	dsos_obj_t	*obj;
-	struct timespec	end, elapsed;
+	struct timespec	beg, end, last;
 	uint64_t	nsecs;
 
 	mydata = malloc(4001);
-//	refs = malloc(num_iters * sizeof(*refs));
 	sem_init(&sem, 0, 0);
 	num = num_iters * id;
 	clock_gettime(CLOCK_REALTIME, &beg);
+	clock_gettime(CLOCK_REALTIME, &last);
 
 	for (i = 0; i < num_iters; ++i) {
 		obj = dsos_obj_alloc(schema, obj_cb, (void *)(uintptr_t)i);
@@ -382,15 +400,15 @@ void do_obj_creates()
 			exit(1);
 		}
 
-		if (sequential) {
+		dsos_obj_put(obj);
+
+		if (sequential)
 			sem_wait(&sem);
-			dsos_obj_free(obj);
+
+		if (progress && i && ((i % 50000) == 0)) {
+			print_elapsed(50000, i, beg, last);
+			clock_gettime(CLOCK_REALTIME, &last);
 		}
-
-		if (progress && i && ((i % 50000) == 0))
-			print_elapsed(i);
-
-//		nanosleep(&ts, NULL);
 	}
 
 	if (!sequential) {
@@ -399,7 +417,7 @@ void do_obj_creates()
 			sem_wait(&sem);
 	}
 
-	print_elapsed(num_iters);
+	print_elapsed(50000, num_iters, beg, last);
 }
 
 void do_obj_finds()
@@ -467,6 +485,7 @@ void do_obj_iter_finds()
 	dsos_iter_t	*iter;
 	sos_key_t	key;
 	sos_obj_t	sos_obj;
+	struct timespec	beg, last;
 
 	iter = dsos_iter_new(schema, attr_seq);
 	if (!iter) {
@@ -477,6 +496,7 @@ void do_obj_iter_finds()
 	mydata = malloc(4000);
 	num = num_iters * id;
 	clock_gettime(CLOCK_REALTIME, &beg);
+	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
 		key = sos_key_for_attr(NULL, attr_seq, num);
 		sos_obj = dsos_iter_find(iter, key);
@@ -492,10 +512,12 @@ void do_obj_iter_finds()
 		}
 		sos_obj_put(sos_obj);
 		++num;
-		if (progress && i && ((i % 50000) == 0))
-			print_elapsed(i);
+		if (progress && i && ((i % 50000) == 0)) {
+			print_elapsed(50000, i, beg, last);
+			clock_gettime(CLOCK_REALTIME, &last);
+		}
 	}
-	print_elapsed(num_iters);
+	print_elapsed(50000, num_iters, beg, last);
 	dsos_iter_close(iter);
 }
 
@@ -508,27 +530,150 @@ uint64_t hash(void *buf, int len)
 	return ret;
 }
 
-void print_elapsed(int num_iters)
+/* Do a simple, purely local SOS object-create test. */
+void do_local()
 {
-	struct timespec	cur, elapsed;
-	uint64_t	nsecs;
+	int		i, num, ret;
+	char		*mydata;
+	char		*cont_nm = "/DATA15/rob/cont.sos";
+	sos_t		cont;
+	sos_part_t	part;
+	sos_schema_t	schema;
+	sos_attr_t	attr_seq, attr_hash, attr_data, attr_int1, attr_int2;
+	struct timespec	beg, last;
+
+	ret = sos_container_new(cont_nm, 0755);
+	if (ret) {
+		fprintf(stderr, "could not create container err %d\n", ret);
+		exit(1);
+	}
+	cont = sos_container_open(cont_nm, 0755);
+	if (!cont) {
+		fprintf(stderr, "could not open container\n");
+		exit(1);
+	}
+	ret = sos_part_create(cont, "ROOT", NULL);
+	if (ret) {
+		fprintf(stderr, "could not create partition err %d\n", ret);
+		exit(1);
+	}
+	part = sos_part_find(cont, "ROOT");
+	if (!part) {
+		fprintf(stderr, "could not find partition\n");
+		exit(1);
+	}
+	ret = sos_part_state_set(part, SOS_PART_STATE_PRIMARY);
+	if (ret) {
+		fprintf(stderr, "could not set partition state err %d\n", ret);
+		exit(1);
+	}
+	schema = sos_schema_from_template(&schema_template);
+	if (!schema) {
+		fprintf(stderr, "could not create schema\n");
+		exit(1);
+	}
+	ret = sos_schema_add(cont, schema);
+	if (ret) {
+		fprintf(stderr, "could not add schema err %d\n", ret);
+		exit(1);
+	}
+	attr_seq = sos_schema_attr_by_name(schema, "seq");
+	if (!attr_seq) {
+		fprintf(stderr, "could not find attr 'seq'\n");
+		exit(1);
+	}
+	attr_hash = sos_schema_attr_by_name(schema, "hash");
+	if (!attr_hash) {
+		fprintf(stderr, "could not find attr 'hash'\n");
+		exit(1);
+	}
+	attr_data = sos_schema_attr_by_name(schema, "data");
+	if (!attr_data) {
+		fprintf(stderr, "could not find attr 'data'\n");
+		exit(1);
+	}
+	attr_int1 = sos_schema_attr_by_name(schema, "int1");
+	if (!attr_int1) {
+		fprintf(stderr, "could not find attr 'int1'\n");
+		exit(1);
+	}
+	attr_int2 = sos_schema_attr_by_name(schema, "int2");
+	if (!attr_int2) {
+		fprintf(stderr, "could not find attr 'int2'\n");
+		exit(1);
+	}
+
+	mydata = malloc(4001);
+	num = num_iters * id;
+	clock_gettime(CLOCK_REALTIME, &beg);
+	clock_gettime(CLOCK_REALTIME, &last);
+	for (i = 0; i < num_iters; ++i) {
+		sos_obj_t obj = sos_obj_new(schema);
+		if (!obj) {
+			fprintf(stderr, "could not create object %d", i);
+			exit(1);
+		}
+
+		sprintf(mydata, "seq=%08x", num);
+		sos_obj_attr_value_set(obj, attr_seq, num);
+		sos_obj_attr_value_set(obj, attr_int1, num);
+		sos_obj_attr_value_set(obj, attr_int2, num);
+		sos_obj_attr_value_set(obj, attr_hash, hash(mydata, 400));
+		sos_obj_attr_value_set(obj, attr_data, strlen(mydata)+1, mydata);
+		num += 1;
+
+		ret = sos_obj_index(obj);
+		if (ret) {
+			fprintf(stderr, "sos_obj_index ret %d\n", ret);
+			exit(1);
+		}
+
+		sos_obj_put(obj);
+
+		if (progress && i && ((i % 50000) == 0)) {
+			print_elapsed(50000, i, beg, last);
+			clock_gettime(CLOCK_REALTIME, &last);
+		}
+	}
+	print_elapsed(50000, num_iters, beg, last);
+}
+
+void print_elapsed(int num_iters_interval, int num_iters_tot,
+		   struct timespec beg, struct timespec last)
+{
+	struct timespec	cur, elapsed_interval, elapsed_tot;
+	uint64_t	nsecs_interval, nsecs_tot;
 
 	clock_gettime(CLOCK_REALTIME, &cur);
 
-	if ((cur.tv_nsec - beg.tv_nsec) < 0) {
-		elapsed.tv_sec  = cur.tv_sec - beg.tv_sec-1;
-		elapsed.tv_nsec = 1000000000 + cur.tv_nsec - beg.tv_nsec;
+	if ((cur.tv_nsec - last.tv_nsec) < 0) {
+		elapsed_interval.tv_sec  = cur.tv_sec - last.tv_sec-1;
+		elapsed_interval.tv_nsec = 1000000000 + cur.tv_nsec - last.tv_nsec;
 	} else {
-		elapsed.tv_sec  = cur.tv_sec  - beg.tv_sec;
-		elapsed.tv_nsec = cur.tv_nsec - beg.tv_nsec;
+		elapsed_interval.tv_sec  = cur.tv_sec  - last.tv_sec;
+		elapsed_interval.tv_nsec = cur.tv_nsec - last.tv_nsec;
 	}
-	nsecs = elapsed.tv_sec * 1000000000 + elapsed.tv_nsec;
+	nsecs_interval = elapsed_interval.tv_sec * 1000000000 + elapsed_interval.tv_nsec;
 
-	printf("[%5d] %8d: %.0f objs/sec %.1f usecs/obj %.6f secs\n",
+	if ((cur.tv_nsec - beg.tv_nsec) < 0) {
+		elapsed_tot.tv_sec  = cur.tv_sec - beg.tv_sec-1;
+		elapsed_tot.tv_nsec = 1000000000 + cur.tv_nsec - beg.tv_nsec;
+	} else {
+		elapsed_tot.tv_sec  = cur.tv_sec  - beg.tv_sec;
+		elapsed_tot.tv_nsec = cur.tv_nsec - beg.tv_nsec;
+	}
+	nsecs_tot = elapsed_tot.tv_sec * 1000000000 + elapsed_tot.tv_nsec;
+
+	printf("[%5d] %8d: %.0f objs/sec %.1f usecs/obj (this interval), %0.f objs/sec %.1f usecs/obj (cum), %.6f secs\n",
 	       getpid(),
-	       num_iters,
-	       num_iters/(nsecs/1000000000.0),
-	       (nsecs/1000.0)/num_iters,
-	       nsecs/1000000000.0);
+	       num_iters_tot,
+
+	       num_iters_interval/(nsecs_interval/1000000000.0),
+	       (nsecs_interval/1000.0)/num_iters_interval,
+
+	       num_iters_tot/(nsecs_tot/1000000000.0),
+	       (nsecs_tot/1000.0)/num_iters_tot,
+
+	       nsecs_tot/1000000000.0);
 	fflush(stdout);
 }

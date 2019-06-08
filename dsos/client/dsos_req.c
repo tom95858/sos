@@ -171,6 +171,8 @@ void dsos_req_put(dsos_req_t *req)
 		dsos_debug("req %p msg %p resp %p freed\n", req, req->msg, req->resp);
 		if (req->msg)
 			free(req->msg);
+		if (req->resp && (req->flags & REQ_RESPONSE_COPIED))
+			free(req->resp);
 		free(req);
 	}
 }
@@ -180,12 +182,10 @@ dsos_req_all_t *dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt)
 	int		i;
 	dsos_req_all_t	*req_all;
 	dsos_req_t	**reqs;
-	dsosd_msg_t	*msg;
 
 	req_all = calloc(1, sizeof(dsos_req_all_t));
-	msg     = malloc(zap_max_msg(g.zap));
 	reqs    = malloc(g.num_servers * sizeof(dsos_req_t *));
-	if (!req_all || !msg || !reqs)
+	if (!req_all || !reqs)
 		dsos_fatal("out of memory");
 	req_all->num_servers   = g.num_servers;
 	req_all->msg_len_max   = zap_max_msg(g.zap);
@@ -195,8 +195,38 @@ dsos_req_all_t *dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt)
 	req_all->reqs          = reqs;
 	req_all->num_reqs_pend = 0;
 	sem_init(&req_all->sem, 0, 0);
-	for (i = 0; i < g.num_servers; ++i)
+	for (i = 0; i < g.num_servers; ++i) {
 		req_all->reqs[i] = dsos_req_new(req_all_cb, req_all);
+		req_all->reqs[i]->req_all = req_all;
+	}
+
+	dsos_debug("req_all %p\n", req_all);
+
+	return req_all;
+}
+
+dsos_req_all_t *dsos_req_all_async_new(dsos_req_cb_t cb, void *ctxt)
+{
+	int		i;
+	dsos_req_all_t	*req_all;
+	dsos_req_t	**reqs;
+
+	req_all = calloc(1, sizeof(dsos_req_all_t));
+	reqs    = malloc(g.num_servers * sizeof(dsos_req_t *));
+	if (!req_all || !reqs)
+		dsos_fatal("out of memory");
+	req_all->num_servers   = g.num_servers;
+	req_all->msg_len_max   = zap_max_msg(g.zap);
+	req_all->refcount      = 1;
+	req_all->ctxt          = ctxt;
+	req_all->cb            = NULL;
+	req_all->reqs          = reqs;
+	req_all->num_reqs_pend = 0;
+	sem_init(&req_all->sem, 0, 0);
+	for (i = 0; i < g.num_servers; ++i) {
+		req_all->reqs[i] = dsos_req_new(cb, ctxt);
+		req_all->reqs[i]->req_all = req_all;
+	}
 
 	dsos_debug("req_all %p\n", req_all);
 
@@ -208,12 +238,10 @@ dsos_req_all_t *dsos_req_all_sparse_new(dsos_req_all_cb_t cb, void *ctxt)
 	int		i;
 	dsos_req_all_t	*req_all;
 	dsos_req_t	**reqs;
-	dsosd_msg_t	*msg;
 
 	req_all = calloc(1, sizeof(dsos_req_all_t));
-	msg     = malloc(zap_max_msg(g.zap));
 	reqs    = calloc(g.num_servers, sizeof(dsos_req_t *));
-	if (!req_all || !msg || !reqs)
+	if (!req_all || !reqs)
 		dsos_fatal("out of memory");
 	req_all->msg_len_max   = zap_max_msg(g.zap);
 	req_all->refcount      = 1;
@@ -242,6 +270,8 @@ dsos_req_t *dsos_req_all_add_server(dsos_req_all_t *req_all, int server_num)
 	req_all->reqs[server_num] = dsos_req_new(req_all_cb, req_all);
 	if (!req_all->reqs[server_num])
 		dsos_fatal("out of memory\n");
+	req_all->reqs[server_num]->req_all = req_all;
+
 	return req_all->reqs[server_num];
 }
 
@@ -291,14 +321,14 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 
 	/*
 	 * The req->resp response buffer is invalid after this function
-	 * returns, so copy it. This is acceptable because these are
-	 * not part of any fast-path operations.
+	 * returns, so copy it.
 	 */
 	if (req->resp && len) {
 		resp = (dsosd_msg_t *)malloc(len);
 		if (!resp)
 			dsos_fatal("out of memory\n");
 		memcpy(resp, req->resp, len);
+		req->flags |= REQ_RESPONSE_COPIED;
 	} else
 		resp = NULL;
 

@@ -11,6 +11,7 @@ dsos_obj_t *dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt)
 	obj = malloc(sizeof(dsos_obj_t));
 	if (!obj)
 		return NULL;
+	obj->refcount = 1;  // this ref must be put by the application
 
 	req = dsos_req_new(obj_create_cb, obj);
 	if (!req)
@@ -38,17 +39,24 @@ dsos_obj_t *dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt)
 	return obj;
 }
 
-void dsos_obj_free(dsos_obj_t *obj)
+void dsos_obj_get(dsos_obj_t *obj)
+{
+	ods_atomic_inc(&obj->refcount);
+}
+
+void dsos_obj_put(dsos_obj_t *obj)
 {
 	dsos_debug("obj %p sos_obj %p req %p req_all %p flags 0x%x msg %p\n",
 		   obj, obj->sos_obj, obj->req, obj->req_all, obj->flags,
 		   obj->req->msg);
 
-	sos_obj_put(obj->sos_obj);
-	dsos_req_put(obj->req);
-	if (obj->req_all)
-		dsos_req_all_put(obj->req_all);
-	free(obj);
+	if (!ods_atomic_dec(&obj->refcount)) {
+		sos_obj_put(obj->sos_obj);
+		dsos_req_put(obj->req);
+		if (obj->req_all)
+			dsos_req_all_put(obj->req_all);
+		free(obj);
+	}
 }
 
 int dsos_obj_create(dsos_obj_t *obj)
@@ -56,6 +64,8 @@ int dsos_obj_create(dsos_obj_t *obj)
 	rpc_object_create_in_t	args_in;
 
 	args_in.obj = obj;
+
+	dsos_obj_get(obj);  // this is put in the obj_create_cb() below
 
 	return dsos_rpc_object_create(&args_in);
 }
@@ -75,6 +85,7 @@ static void obj_create_cb(dsos_req_t *req, size_t len, void *ctxt)
 	obj->obj_id = resp->obj_id;
 	if (obj->cb)
 		obj->cb(obj, obj->ctxt);
+	dsos_obj_put(obj);
 }
 
 static int attr_value_to_server(sos_value_t v)

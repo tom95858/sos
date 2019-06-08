@@ -71,6 +71,7 @@ typedef struct dsos_req_s {
 	void			*ctxt;         // for callbacks
 	sem_t			sem;           // for signaling the response
 	dsos_conn_t		*conn;         // server connection object
+	dsos_req_all_t		*req_all;      // if part of a req_all
 	LIST_ENTRY(dsos_req_s)	entry;         // for dsosd_req_all_t's list
 } dsos_req_t;
 
@@ -149,6 +150,7 @@ typedef enum {
 } dsos_obj_type_t;
 typedef void (*dsos_obj_cb_t)(dsos_obj_t *, void *);
 typedef struct dsos_obj_s {
+	ods_atomic_t		refcount;
 	dsos_obj_type_t		flags;
 	sos_obj_t		sos_obj;       // the actual SOS object
 	dsos_schema_t		*schema;
@@ -176,16 +178,20 @@ typedef struct dsos_conn_s {
 /* Internal RPC API. */
 
 typedef struct {
-	int	server_num;
+	int		server_num;
+	int		dump;  // for debug only
 } rpc_ping_in_t;
 typedef struct {
-	int	tot_num_connects;
-	int	tot_num_disconnects;
-	int	tot_num_reqs;
-	int	num_clients;
+	int		tot_num_connects;
+	int		tot_num_disconnects;
+	int		tot_num_reqs;
+	int		num_clients;
+	uint64_t	nsecs;
 } rpc_ping_out_t;
 int	dsos_rpc_ping(rpc_ping_in_t  *args_inp,
 		      rpc_ping_out_t *args_outp);
+int	dsos_rpc_ping_all(rpc_ping_in_t  *args_inp,
+			  rpc_ping_out_t **args_outp);
 
 typedef struct {
 	char		path[DSOSD_MSG_MAX_PATH];
@@ -205,6 +211,14 @@ typedef struct {
 } rpc_container_open_out_t;
 int	dsos_rpc_container_open(rpc_container_open_in_t  *args_inp,
 				rpc_container_open_out_t *args_outp);
+
+typedef struct {
+	char		path[DSOSD_MSG_MAX_PATH];
+} rpc_container_delete_in_t;
+typedef struct {
+} rpc_container_delete_out_t;
+int	dsos_rpc_container_delete(rpc_container_delete_in_t  *args_inp,
+				  rpc_container_delete_out_t *args_outp);
 
 typedef struct {
 	dsosd_handle_t	*handles;
@@ -377,6 +391,7 @@ dsos_req_t	*dsos_req_new(dsos_req_cb_t cb, void *ctxt);
 void		dsos_req_put(dsos_req_t *req);
 int		dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len);
 dsos_req_t	*dsos_req_all_add_server(dsos_req_all_t *req_all, int server_num);
+dsos_req_all_t	*dsos_req_all_async_new(dsos_req_cb_t cb, void *ctxt);
 dsos_req_all_t	*dsos_req_all_sparse_new(dsos_req_all_cb_t cb, void *ctxt);
 dsos_req_all_t	*dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt);
 void		dsos_req_all_put(dsos_req_all_t *req_all);

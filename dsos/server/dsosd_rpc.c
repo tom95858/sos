@@ -25,14 +25,13 @@ void rpc_handle_ping(zap_ep_t ep, dsosd_msg_ping_req_t *msg, size_t len)
 	dsosd_debug("ep %p msg %p len %d\n", ep, msg, len);
 
 	req = dsosd_req_new(client, DSOSD_MSG_PING_RESP, msg->hdr.id,
-			    sizeof(dsosd_msg_ping_resp_t) + 16);
+			    sizeof(dsosd_msg_ping_resp_t));
 	req->resp->u.ping_resp.tot_num_connects    = g.stats.tot_num_connects;
 	req->resp->u.ping_resp.tot_num_disconnects = g.stats.tot_num_disconnects;
 	req->resp->u.ping_resp.tot_num_reqs        = g.stats.tot_num_reqs;
 	req->resp->u.ping_resp.num_clients         = g.num_clients;
-	strcpy(req->resp->u.ping_resp.data, "ping response");
 
-	dsosd_req_complete(req, sizeof(dsosd_msg_ping_resp_t)+16);
+	dsosd_req_complete(req, sizeof(dsosd_msg_ping_resp_t));
 }
 
 void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len)
@@ -150,6 +149,30 @@ void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg,
 		    msg->path, msg->perms, cont);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_container_open_resp_t));
+}
+
+/*
+ * This command is dangerous in the sense that it does an rm -rf of a
+ * path passed in as an RPC argument. This is used for testing and
+ * probably should remain undocumented.
+ */
+void rpc_handle_container_delete(zap_ep_t ep, dsosd_msg_container_delete_req_t *msg, size_t len)
+{
+	int			ret;
+	char			*cmd;
+	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+	if (asprintf(&cmd, "/usr/bin/rm -rf '%s'", msg->path) < 0) {
+		ret = ENOMEM;
+	} else {
+		ret = system(cmd);
+		free(cmd);
+	}
+
+	dsosd_debug("ep %d msg %p len %d: '%s' ret %d\n", ep, msg, len, msg->path, ret);
+
+	dsosd_req_complete_with_status(client, DSOSD_MSG_CONTAINER_DELETE_RESP, msg->hdr.id,
+				       sizeof(dsosd_msg_container_delete_resp_t), ret);
 }
 
 void rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *msg, size_t len)

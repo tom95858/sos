@@ -111,6 +111,7 @@ AC_CONFIG_FILES([
 		dsos/include/Makefile
 		dsos/client/Makefile
 		dsos/server/Makefile
+		dsos/util/Makefile
 		util/Makefile
 		util/json/Makefile
 		util/mmalloc/Makefile

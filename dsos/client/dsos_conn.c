@@ -30,6 +30,10 @@ const char *dsos_msg_type_to_str(int id)
 		return "DSOSD_CONTAINER_CLOSE_REQ";
 	    case DSOSD_MSG_CONTAINER_CLOSE_RESP:
 		return "DSOSD_CONTAINER_CLOSE_RESP";
+	    case DSOSD_MSG_CONTAINER_DELETE_REQ:
+		return "DSOSD_CONTAINER_DELETE_REQ";
+	    case DSOSD_MSG_CONTAINER_DELETE_RESP:
+		return "DSOSD_CONTAINER_DELETE_RESP";
 	    case DSOSD_MSG_ITERATOR_CLOSE_REQ:
 		return "DSOSD_ITERATOR_CLOSE_REQ";
 	    case DSOSD_MSG_ITERATOR_CLOSE_RESP:
@@ -91,8 +95,8 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 {
 	dsos_req_t		*req;
 	dsosd_msg_t		*resp;
-	struct sockaddr_in	lsin = {0};
-	struct sockaddr_in	rsin = {0};
+	struct sockaddr_in	lsin;
+	struct sockaddr_in	rsin;
 	socklen_t		slen;
 	char			mybuf[16];
 	dsos_conn_t		*conn = (dsos_conn_t *)zap_get_ucontext(ep);
@@ -110,11 +114,8 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_DISCONNECTED:
-		// We're disconnected from a server. This probably is fatal
-		// for the client.
-		// XXX
 		dsos_error("ZAP_EVENT_DISCONNECTED ep %p conn %p\n", ep, conn);
-//		zap_free(ep);
+		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_REJECTED:
 	    case ZAP_EVENT_CONNECT_ERROR:
@@ -132,7 +133,7 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 			   req, resp, ev->data_len, resp->u.hdr.id, resp->u.hdr.type,
 			   resp->u.hdr.status, resp->u.hdr.flags, conn);
 		if (!req)  {
-			dsos_fatal("no req for id %ld\n", resp->u.hdr.id);
+			dsos_fatal("no req for id %ld from server %d\n", resp->u.hdr.id, conn->server_id);
 			break;
 		}
 		// On send, req->msg points to a send buffer (malloc'd by dsos_req_new but
@@ -199,13 +200,21 @@ int dsos_connect(const char *host, const char *service, int server_id)
 
 void dsos_disconnect(void)
 {
-	int	i, ret;
+	int		i, ret;
+	zap_err_t	zerr;
 
 	dsos_debug("starting\n");
 	for (i = 0; i < g.num_servers; ++i) {
+		sem_init(&g.conns[i].conn_sem, 0, 0);
+		zerr = zap_unmap(g.conns[i].ep, g.conns[i].map);
+		if (zerr)
+			dsos_error("unmap err %d\n", zerr);
 		ret = zap_close(g.conns[i].ep);
 		if (ret)
 			dsos_error("disconnect err %d\n", ret);
+	}
+	for (i = 0; i < g.num_servers; ++i) {
+		sem_wait(&g.conns[i].conn_sem);
 		zap_free(g.conns[i].ep);
 	}
 	dsos_debug("done\n");
