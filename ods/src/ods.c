@@ -1137,6 +1137,7 @@ int ods_extend(ods_t ods, size_t sz)
 	struct del_fn_arg fn_arg;
 	struct stat pg_sb, obj_sb;
 	struct ods_pg_s *pg;
+	uint64_t pg_no;
 	size_t n_pages;
 	size_t n_sz;
 	int rc;
@@ -1192,12 +1193,30 @@ int ods_extend(ods_t ods, size_t sz)
 		rc = ENOMEM;
 		goto out;
 	}
-	/* Update the page map to include the new pages */
-	pg = &ods->pg_table->pg_pages[ods->pg_table->pg_count];
-	pg->pg_count = n_pages;
-	pg->pg_next = ods->pg_table->pg_free;
-	ods->pg_table->pg_free = ods->pg_table->pg_count;
+	/*
+	 * Search the free page-range list to see if there is an entry that
+	 * abuts the new page-range
+	 */
+	for (pg_no = ods->pg_table->pg_free; pg_no;
+	     pg_no = ods->pg_table->pg_pages[pg_no].pg_next) {
+		if (ods->pg_table->pg_count ==
+		    pg_no + ods->pg_table->pg_pages[pg_no].pg_count)
+			break;
+	}
+
+	if (pg_no) {
+		/* Found an abuting page range */
+		pg = &ods->pg_table->pg_pages[pg_no];
+		pg->pg_count += n_pages;
+	} else {
+		/* Add the new pages as their own page-range */
+		pg = &ods->pg_table->pg_pages[ods->pg_table->pg_count];
+		pg->pg_count = n_pages;
+		pg->pg_next = ods->pg_table->pg_free;
+		ods->pg_table->pg_free = ods->pg_table->pg_count;
+	}
 	ods->pg_table->pg_count += n_pages;
+
 
 	/* Update the cached file sizes. */
 	ods->obj_sz = obj_sb.st_size + n_sz;
