@@ -58,7 +58,7 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 	if (!obj) {
 		req->resp->u.hdr.status = ENOMEM;
 		req->resp->u.hdr.flags  = 0;
-		dsosd_debug("error creating obj\n");
+		dsosd_error("error %d creating obj\n", errno);
 		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 		return;
 	}
@@ -116,18 +116,32 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 	}
 }
 
+static char *rewrite_path(char *path)
+{
+	char	*server_num;
+
+	asprintf(&server_num, "%d", g.opts.server_num);
+	path = str_replace(path, "%%", server_num);
+	free(server_num);
+	return path;
+}
+
 void rpc_handle_container_new(zap_ep_t ep, dsosd_msg_container_new_req_t *msg, size_t len)
 {
 	int			ret;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
+	char			*path;
 
-	ret = sos_container_new(msg->path, msg->mode);
+	path = rewrite_path(msg->path);
+
+	ret = sos_container_new(path, msg->mode);
 
 	dsosd_debug("ep %d msg %p len %d: '%s' perms 0%o, ret %d\n", ep, msg, len,
-		    msg->path, msg->mode, ret);
+		    path, msg->mode, ret);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_CONTAINER_NEW_RESP, msg->hdr.id,
 				       sizeof(dsosd_msg_container_new_resp_t), ret);
+	free(path);
 }
 
 void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg, size_t len)
@@ -135,8 +149,11 @@ void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg,
 	dsosd_req_t		*req;
 	sos_t			cont;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
+	char			*path;
 
-	cont = sos_container_open(msg->path, msg->perms);
+	path = rewrite_path(msg->path);
+
+	cont = sos_container_open(path, msg->perms);
 
 	req = dsosd_req_new(client, DSOSD_MSG_CONTAINER_OPEN_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_container_open_resp_t));
@@ -146,9 +163,10 @@ void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg,
 		req->resp->u.hdr.status = ENOENT;
 
 	dsosd_debug("ep %d msg %p len %d: '%s' perms 0%o, cont %p\n", ep, msg, len,
-		    msg->path, msg->perms, cont);
+		    path, msg->perms, cont);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_container_open_resp_t));
+	free(path);
 }
 
 /*
@@ -161,18 +179,22 @@ void rpc_handle_container_delete(zap_ep_t ep, dsosd_msg_container_delete_req_t *
 	int			ret;
 	char			*cmd;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
+	char			*path;
 
-	if (asprintf(&cmd, "/usr/bin/rm -rf '%s'", msg->path) < 0) {
+	path = rewrite_path(msg->path);
+
+	if (asprintf(&cmd, "/usr/bin/rm -rf '%s'", path) < 0) {
 		ret = ENOMEM;
 	} else {
 		ret = system(cmd);
 		free(cmd);
 	}
 
-	dsosd_debug("ep %d msg %p len %d: '%s' ret %d\n", ep, msg, len, msg->path, ret);
+	dsosd_debug("ep %d msg %p len %d: '%s' ret %d\n", ep, msg, len, path, ret);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_CONTAINER_DELETE_RESP, msg->hdr.id,
 				       sizeof(dsosd_msg_container_delete_resp_t), ret);
+	free(path);
 }
 
 void rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *msg, size_t len)
@@ -795,4 +817,53 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 	else
 		dsosd_req_complete_with_status(client, DSOSD_MSG_ITERATOR_STEP_RESP, msg->hdr.id,
 					       sizeof(dsosd_msg_iterator_step_resp_t), ret);
+}
+
+// taken from https://stackoverflow.com/questions/779875/what-is-the-function-to-replace-string-in-c
+// You must free the result if result is non-NULL.
+char *str_replace(char *orig, char *rep, char *with)
+{
+	char *result; // the return string
+	char *ins;    // the next insert point
+	char *tmp;    // varies
+	int len_rep;  // length of rep (the string to remove)
+	int len_with; // length of with (the string to replace rep with)
+	int len_front; // distance between rep and end of last rep
+	int count;    // number of replacements
+
+	// sanity checks and initialization
+	if (!orig || !rep)
+		return NULL;
+	len_rep = strlen(rep);
+	if (len_rep == 0)
+		return NULL; // empty rep causes infinite loop during count
+	if (!with)
+		with = "";
+	len_with = strlen(with);
+
+	// count the number of replacements needed
+	ins = orig;
+	for (count = 0; tmp = strstr(ins, rep); ++count) {
+		ins = tmp + len_rep;
+	}
+
+	tmp = result = malloc(strlen(orig) + (len_with - len_rep) * count + 1);
+
+	if (!result)
+		return NULL;
+
+	// first time through the loop, all the variable are set correctly
+	// from here on,
+	//    tmp points to the end of the result string
+	//    ins points to the next occurrence of rep in orig
+	//    orig points to the remainder of orig after "end of rep"
+	while (count--) {
+		ins = strstr(orig, rep);
+		len_front = ins - orig;
+		tmp = strncpy(tmp, orig, len_front) + len_front;
+		tmp = strcpy(tmp, with) + len_with;
+		orig += len_front + len_rep; // move to next "end of rep"
+	}
+	strcpy(tmp, orig);
+	return result;
 }

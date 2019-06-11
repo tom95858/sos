@@ -141,7 +141,7 @@ dsosd_req_t *dsosd_req_complete_with_obj(zap_ep_t ep, sos_obj_t sos_obj,
 		if (!req)
 			return NULL;
 		if (client_buf_sz < obj_sz) {
-			dsosd_error("client buf too small\n");
+			dsosd_error("client buf too small; is %d need %d\n", client_buf_sz, obj_sz);
 			req->resp->u.hdr.status = E2BIG;
 			req->resp->u.hdr.flags  = 0;
 			dsosd_req_complete(req, resp_len);

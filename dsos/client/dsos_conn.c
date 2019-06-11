@@ -114,12 +114,12 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_DISCONNECTED:
-		dsos_error("ZAP_EVENT_DISCONNECTED ep %p conn %p\n", ep, conn);
+		dsos_debug("ZAP_EVENT_DISCONNECTED ep %p conn %p\n", ep, conn);
 		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_REJECTED:
 	    case ZAP_EVENT_CONNECT_ERROR:
-		dsos_error("connect error ep %p\n", ep);
+		dsos_error("connect error ep %p status %d\n", ep, ev->status);
 		zap_free(ep);
 		conn->conn_status = ev->status;
 		sem_post(&conn->conn_sem);
@@ -189,9 +189,9 @@ int dsos_connect(const char *host, const char *service, int server_id)
 	sem_init(&conn->conn_sem, 0, 0);
 	zerr = zap_connect(conn->ep, (struct sockaddr *)&sin, sizeof(sin), NULL, 0);
 	if (zerr) {
-		dsos_error("could not connect to server %s:%s err %s\n",
-			   host, service, zap_err_str(zerr));
-		return 1;
+		dsos_error("could not connect to server %s:%s zerr %d %s\n",
+			   host, service, zerr, zap_err_str(zerr));
+		return zerr;
 	}
 	sem_wait(&conn->conn_sem);
 

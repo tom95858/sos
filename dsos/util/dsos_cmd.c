@@ -336,7 +336,7 @@ int do_import(int ac, char *av[])
 			buf[strlen(buf)-1] = 0;  // chomp
 		obj = dsos_obj_alloc(schema, obj_cb, &sem);
 		if (!obj) {
-			fprintf(stderr, "could not create object %d", i);
+			fprintf(stderr, "could not create object %d\n", i);
 			exit(1);
 		}
 		for (i = 0, tok = strtok(buf, ","); tok; tok = strtok(NULL, ","), ++i) {

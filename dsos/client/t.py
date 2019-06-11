@@ -14,35 +14,41 @@ class Test:
     def __init__(self, _name, _schema):
         self.name     = _name
         self.schema   = _schema
+        self.contnm   = "/tmp/cont-%%.sos"
         self.num_recs = 10
         self.template = ",".join(n+":"+t for n,t in self.schema.items())
-        self.doTest()
+
+    def cont(self, _contnm):
+        self.contnm = _contnm
+
+    def numRecs(self, _num_recs):
+        self.num_recs = _num_recs
 
     def doTest(self):
         print "testing schema {}: {}".format(self.name,self.template)
-        self.doCont()
         self.doSchema()
+        self.doCsv()
         self.doImport()
         self.doIter()
         self.doFind()
 
     def doCont(self):
-        check_call([dsos_cmd, "cont", "--delete", "/tmp/cont.sos"],
+        check_call([dsos_cmd, "cont", "--delete", self.contnm],
                    stderr=STDOUT)
-        check_call([dsos_cmd, "cont", "--create", "/tmp/cont.sos", "755", "ROOT"],
+        check_call([dsos_cmd, "cont", "--create", self.contnm, "755", "ROOT"],
                    stderr=STDOUT)
 
     def doSchema(self):
-        check_call([dsos_cmd, "schema", "--cont", "/tmp/cont.sos", "--schema", self.name, "--add", "--template", self.template],
+        check_call([dsos_cmd, "schema", "--cont", self.contnm, "--schema", self.name, "--add", "--template", self.template],
                    stderr=STDOUT)
-        out = check_output([dsos_cmd, "schema", "--cont", "/tmp/cont.sos", "--schema", self.name, "--dump"],
+        out = check_output([dsos_cmd, "schema", "--cont", self.contnm, "--schema", self.name, "--dump"],
                            stderr=STDOUT).strip()
         if out != self.template:
             raise Exception(["dumped schema incorrect: expected", self.template, "got", out])
 
-    def doImport(self):
+    def doCsv(self):
         print "creating csv file with", self.num_recs, "records"
-        vals = {}
+        vals = OrderedDict()
         f = open("csv", "w")
         for i in range(0, self.num_recs):
             for n,t in self.schema.items():
@@ -61,9 +67,11 @@ class Test:
             f.write(",".join(vals.values()) + "\n")
         del vals
         f.close()
+
+    def doImport(self):
         print "importing csv"
-        print [dsos_cmd, "import", "--cont", "/tmp/cont.sos", "--schema", self.name, "csv"]
-        check_call([dsos_cmd, "import", "--cont", "/tmp/cont.sos", "--schema", self.name, "csv"],
+        print [dsos_cmd, "import", "--cont", self.contnm, "--schema", self.name, "csv"]
+        check_call([dsos_cmd, "import", "--cont", self.contnm, "--schema", self.name, "csv"],
                    stderr=STDOUT)
 
     def doIter(self):
@@ -73,12 +81,12 @@ class Test:
                 n = n.replace('*','')
                 print "testing iteration on attribute", n
                 f = open("out", "w");
-                print [dsos_cmd, "iter", "--cont", "/tmp/cont.sos", "--schema", self.name, "--attr", n]
-                check_call([dsos_cmd, "iter", "--cont", "/tmp/cont.sos", "--schema", self.name, "--attr", n],
+                print [dsos_cmd, "iter", "--cont", self.contnm, "--schema", self.name, "--attr", n]
+                check_call([dsos_cmd, "iter", "--cont", self.contnm, "--schema", self.name, "--attr", n],
                            stdout=f, stderr=f)
                 f.close()
                 f = open("csv-sorted", "w");
-                check_call(["sort", "-t,", "--key="+str(i), "csv"], stdout=f, stderr=f)
+                check_call(["sort", "-n", "-t,", "--key="+str(i)+","+str(i), "csv"], stdout=f, stderr=f)
                 f.close()
                 check_call(["diff", "csv-sorted", "out"], stderr=STDOUT)
                 i += 1
@@ -96,8 +104,8 @@ class Test:
             for rec in recs:
                 rec = rec.strip()
                 val = rec.split(",")[i]
-                print [dsos_cmd, "find", "--cont", "/tmp/cont.sos", "--schema", self.name, n+"="+val ]
-                out = check_output([dsos_cmd, "find", "--cont", "/tmp/cont.sos", "--schema", self.name, n+"="+val ],
+#                print [dsos_cmd, "find", "--cont", self.contnm, "--schema", self.name, n+"="+val ]
+                out = check_output([dsos_cmd, "find", "--cont", self.contnm, "--schema", self.name, n+"="+val ],
                                    stderr=STDOUT).strip()
                 if out != rec:
                     raise Exception(["could not find object: attr", n, "val", val, "\nwant:", rec, "\ngot: ", out])
@@ -109,11 +117,27 @@ if __name__ == "__main__":
         if "DSOS_CONFIG" not in os.environ:
             raise Exception("must set $DSOS_CONFIG")
 
-        for sz in range(1024,1500):
-            Test("test{}".format(sz), OrderedDict([ ("*seq","uint64"),
-                                                    ("*int1","uint64"),
-                                                    ("*int2","uint64"),
-                                                    ("data","char[{}]".format(sz)) ]))
+        t = Test("test", OrderedDict([ ("*seq","uint64"),
+                                       ("*int1","uint64"),
+                                       ("*int2","uint64"),
+                                       ("*int3","uint64"),
+                                       ("data","char[9000]") ]))
+        t.cont("/tmp/cont-py-%%.sos")
+        t.doIter()
+#        t.doTest()
+        del t
+
+#        for sz in range(1900,2048):
+#        for sz in range(2048,2100):
+#        for sz in range(2100,3100):
+#        for sz in range(9000,9010):
+#            t = Test("test{}".format(sz), OrderedDict([ ("*seq","uint64"),
+#                                                        ("*int1","uint64"),
+#                                                        ("*int2","uint64"),
+#                                                        ("data","char[{}]".format(sz)) ]))
+#            t.numRecs(10000);
+#            t.doTest()
+#            del t
 
     except CalledProcessError as e:
         print "Command " + " ".join(e.cmd) + " failed with status " + str(e.returncode) + ":"

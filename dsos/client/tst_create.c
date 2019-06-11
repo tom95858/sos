@@ -15,12 +15,14 @@
 #include "dsos_priv.h"
 
 int		num_iters  = 4;
+int		start_num = 0;
 int		sleep_msec = 0;
 int		lookup = 0;
 int		progress = 0;
 int		sequential = 0;
 int		local = 0;
 int		server_num;
+char		*cont_nm = "/tmp/cont.sos";
 struct timespec	ts;
 uint8_t		id;
 uint64_t	nsecs;
@@ -59,17 +61,18 @@ int main(int ac, char *av[])
 	char		*config = NULL;
 
 	struct option	lopts[] = {
-		{ "config",	required_argument, NULL, 'c' },
-		{ "id",	        required_argument, NULL, 'i' },
 		{ "find",       no_argument,       NULL, 'f' },
+		{ "config",	required_argument, NULL, 'c' },
+		{ "cont",	required_argument, NULL, 'C' },
 		{ "create",     no_argument,       NULL, 'o' },
 		{ "iter",       no_argument,       NULL, 'l' },
+		{ "local",      no_argument,       NULL, 'u' },
+		{ "numiters",	required_argument, NULL, 'n' },
 		{ "ping",       required_argument, NULL, 'p' },
 		{ "progress",   no_argument,       NULL, 'g' },
 		{ "sequential", no_argument,       NULL, 'q' },
-		{ "local",      no_argument,       NULL, 'u' },
-		{ "numiters",	required_argument, NULL, 'n' },
 		{ "sleep",	required_argument, NULL, 's' },
+		{ "start",	required_argument, NULL, 'S' },
 		{ 0,		0,		   0,     0  }
 	};
 
@@ -79,8 +82,8 @@ int main(int ac, char *av[])
 		    case 'c':
 			config = strdup(optarg);
 			break;
-		    case 'i':
-			id = atoi(optarg) - 1;
+		    case 'C':
+			cont_nm = strdup(optarg);
 			break;
 		    case 'o':
 			create = 1;
@@ -110,6 +113,9 @@ int main(int ac, char *av[])
 		    case 's':
 			sleep_msec = atoi(optarg);
 			break;
+		    case 'S':
+			start_num = atoi(optarg);
+			break;
 		    default:
 			usage(av);
 			exit(0);
@@ -132,8 +138,9 @@ int main(int ac, char *av[])
 	ts.tv_sec  = nsecs / 1000000000;
 	ts.tv_nsec = nsecs % 1000000000;
 
-	if (dsos_init(config)) {
-		fprintf(stderr, "could not establish all DSOS server connections: \n");
+	ret = dsos_init(config);
+	if (ret) {
+		fprintf(stderr, "err %d connecting to DSOS servers:\n", ret);
 		for (i = 0; i < g.num_servers; ++i)
 			fprintf(stderr, "%d ", dsos_err_get()[i]);
 		fprintf(stderr, "\n");
@@ -195,9 +202,9 @@ void do_ping()
 
 void do_init()
 {
-	cont = dsos_container_open("/tmp/cont.sos", 0755);
+	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
-		cont = create_cont("/tmp/cont.sos", 0755);
+		cont = create_cont(cont_nm, 0755);
 		if (!cont) {
 			fprintf(stderr, "could not create container\n");
 			exit(1);
@@ -375,7 +382,7 @@ void do_obj_creates()
 
 	mydata = malloc(4001);
 	sem_init(&sem, 0, 0);
-	num = num_iters * id;
+	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 
@@ -429,7 +436,7 @@ void do_obj_finds()
 	sos_obj_t	sos_obj;
 
 	mydata = malloc(4000);
-	num = num_iters * id;
+	num = start_num;
 	for (i = 0; i < num_iters; ++i) {
 		key = sos_key_for_attr(NULL, attr_seq, num);
 		sos_obj = dsos_obj_find(schema, attr_seq, key);
@@ -463,7 +470,7 @@ void do_obj_iter()
 	}
 	printf("created dsos iter\n");
 	mydata = malloc(4000);
-	num = num_iters * id;
+	num = start_num;
 	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
 		char buf1[16], buf2[32];
 		sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
@@ -494,7 +501,7 @@ void do_obj_iter_finds()
 	}
 	printf("created dsos iter\n");
 	mydata = malloc(4000);
-	num = num_iters * id;
+	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
@@ -604,7 +611,7 @@ void do_local()
 	}
 
 	mydata = malloc(4001);
-	num = num_iters * id;
+	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {

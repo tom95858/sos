@@ -1079,7 +1079,7 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 			}
 		} else if (resp->hdr.status != ENOENT) {
 			dsos_err_set(i, resp->hdr.status);
-			dsos_debug("err %d from server %d\n", resp->hdr.status, i);
+			dsos_error("err %d from server %d\n", resp->hdr.status, i);
 		}
 	}
 

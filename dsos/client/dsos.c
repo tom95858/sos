@@ -92,8 +92,18 @@ int dsos_init(const char *config_filename)
 	for (i = 0; i < g.num_servers; ++i) {
 		conn = &g.conns[i];
 		zerr = zap_map(conn->ep, &conn->map, g.heap_buf, g.opts.heap_sz, ZAP_ACCESS_READ);
-		zerr = zerr || zap_share(conn->ep, conn->map, NULL, 0);
-		dsos_err_set(i, zerr);
+		if (zerr) {
+			dsos_error("srv %d: err %d (%s) mapping shared heap %p sz %d\n",
+				   i, zerr, zap_err_str(zerr), g.heap_buf, g.opts.heap_sz);
+			dsos_err_set(i, zerr);
+			continue;
+		}
+		zerr = zap_share(conn->ep, conn->map, NULL, 0);
+		if (zerr) {
+			dsos_error("srv %d: err %d (%s) sharing heap map %p\n", i, conn->map);
+			dsos_err_set(i, zerr);
+			continue;
+		}
 		dsos_debug("heap %p/%d has map %p for server %d\n",
 			   g.heap_buf, g.opts.heap_sz, conn->map, i);
 	}

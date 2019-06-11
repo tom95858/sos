@@ -97,6 +97,7 @@ void		dsosd_req_get(dsosd_req_t *req);
 dsosd_req_t	*dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t msg_len);
 void		dsosd_req_put(dsosd_req_t *req);
 int		idx_rbn_cmp_fn(void *tree_key, void *key);
+char		*str_replace(char *orig, char *rep, char *with);
 
 sos_schema_template_t	rpc_deserialize_schema_template(char *buf, size_t len);
 void		rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg, size_t len);
