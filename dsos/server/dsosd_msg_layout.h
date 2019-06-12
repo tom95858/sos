@@ -103,7 +103,7 @@ typedef struct dsosd_msg_hdr2 {
 
 typedef struct dsosd_msg_ping_req {
 	dsosd_msg_hdr_t		hdr;
-	uint32_t		dump;
+	uint32_t		debug;
 } dsosd_msg_ping_req_t;
 
 typedef struct dsosd_msg_ping_resp {

@@ -22,13 +22,13 @@ int dsos_ping(int server_num, struct dsos_ping_stats *stats)
 	return ret;
 }
 
-int dsos_ping_all(struct dsos_ping_stats **statsp, int dump)
+int dsos_ping_all(struct dsos_ping_stats **statsp, int debug)
 {
 	int			i, ret;
 	rpc_ping_in_t		args_in;
 	rpc_ping_out_t		*args_outp;
 
-	args_in.dump = dump;
+	args_in.debug = debug;
 	ret = dsos_rpc_ping_all(&args_in, &args_outp);
 
 	if (!ret && statsp) {
@@ -243,10 +243,10 @@ dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
 	iter->done      = 0;
 	iter->last_srvr = -1;
 	iter->obj_sz    = schema->sos_schema->data->obj_sz + schema->sos_schema->data->array_data_sz;
-	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
-	iter->sos_objs = calloc(g.num_servers, sizeof(sos_obj_t));
+	iter->sos_objs  = calloc(g.num_servers, sizeof(sos_obj_t));
 	if (!iter->sos_objs)
 		return NULL;
+	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
 
 	return iter;
 }
@@ -266,7 +266,7 @@ int dsos_iter_close(dsos_iter_t *iter)
 			sos_obj_put(iter->sos_objs[i]);
 	}
 	free(iter->sos_objs);
-	iter->handles = NULL;
+	free(iter->handles);
 	free(iter);
 
 	return ret;
@@ -287,7 +287,8 @@ static void iter_rbt_insert(dsos_iter_t *iter, sos_value_t v, int server_num)
 
 	rbt_ins(&iter->rbt, (void *)rbn);
 
-	dsos_debug("iter %p inserted value %ld\n", iter, v->data->prim.uint64_);
+	dsos_debug("iter %p inserted value %ld from server %d\n",
+		   iter, v->data->prim.uint64_, server_num);
 }
 
 static void iter_insert_obj(dsos_iter_t *iter, int server_num)
@@ -301,14 +302,18 @@ static int iter_rbt_min(dsos_iter_t *iter)
 {
 	int		ret = -1;
 	struct iter_rbn	*rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
+
 	if (rbn) {
 		ret = rbn->server_num;
 		rbt_del(&iter->rbt, (struct rbn *)rbn);
 		sos_value_put(rbn->rbn.key);
 		sos_value_free(rbn->rbn.key);
+		dsos_debug("iter %p min value %ld from server %d\n",
+			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_, ret);
 		free(rbn);
-	}
-	dsos_debug("iter %p server_num %d\n", iter, ret);
+	} else
+		dsos_debug("iter %p rbt empty\n");
+
 	return ret;
 }
 
@@ -329,15 +334,25 @@ static sos_obj_t iter_remove_min(dsos_iter_t *iter)
 	return sos_obj;
 }
 
-static void iter_reset(dsos_iter_t *iter)
+static int iter_reset(dsos_iter_t *iter)
 {
+	int		i;
 	sos_obj_t	sos_obj;
 
-	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
-	while (sos_obj = iter_remove_min(iter))
-		sos_obj_put(sos_obj);
+	/* Clear out the rbt. */
+	while (iter_rbt_min(iter) >= 0) ;
+
+	/* Ensure we have num_servers sos objects allocated and ready to be filled. */
+	for (i = 0; i < g.num_servers; ++i) {
+		if (!iter->sos_objs[i])
+			iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
+		if (!iter->sos_objs[i])
+			return ENOMEM;
+	}
 	iter->done      = 0;
 	iter->last_srvr = -1;
+	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
+	return 0;
 }
 
 sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
@@ -346,20 +361,13 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 	rpc_iter_step_all_in_t	args_in;
 	rpc_iter_step_all_out_t	args_out;
 
-	iter_reset(iter);
-
-	for (i = 0; i < g.num_servers; ++i) {
-		iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
-		if (!iter->sos_objs[i])
-			return NULL;
-	}
-
 	args_in.op           = DSOSD_MSG_ITER_OP_BEGIN;
 	args_in.iter_handles = iter->handles;
 	args_in.sos_objs     = iter->sos_objs;
 	args_in.key          = NULL;
 
-	ret = dsos_rpc_iter_step_all(&args_in, &args_out);
+	ret = iter_reset(iter);
+	ret = ret || dsos_rpc_iter_step_all(&args_in, &args_out);
 	if (ret)
 		return NULL;
 
@@ -410,20 +418,13 @@ sos_obj_t dsos_iter_find(dsos_iter_t *iter, sos_key_t key)
 	rpc_iter_step_all_in_t	args_in;
 	rpc_iter_step_all_out_t	args_out;
 
-	iter_reset(iter);
-
-	for (i = 0; i < g.num_servers; ++i) {
-		iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
-		if (!iter->sos_objs[i])
-			return NULL;
-	}
-
 	args_in.op           = DSOSD_MSG_ITER_OP_FIND;
 	args_in.iter_handles = iter->handles;
 	args_in.sos_objs     = iter->sos_objs;
 	args_in.key          = key;
 
-	ret = dsos_rpc_iter_step_all(&args_in, &args_out);
+	ret = iter_reset(iter);
+	ret = ret || dsos_rpc_iter_step_all(&args_in, &args_out);
 	if (ret)
 		return NULL;
 

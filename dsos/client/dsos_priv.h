@@ -20,6 +20,11 @@ typedef struct dsos_obj_s	dsos_obj_t;
 typedef struct dsos_s		dsos_t;
 typedef struct dsos_schema_s	dsos_schema_t;
 
+typedef struct {
+	void	*ptr1;
+	void	*ptr2;
+} dsos_ptr_tuple_t;
+
 /* This will be a zap_new() parameter eventually. */
 #define SQ_DEPTH	4
 
@@ -179,7 +184,7 @@ typedef struct dsos_conn_s {
 
 typedef struct {
 	int		server_num;
-	int		dump;  // for debug only
+	int		debug;
 } rpc_ping_in_t;
 typedef struct {
 	int		tot_num_connects;
@@ -358,7 +363,7 @@ typedef struct {
 } rpc_iter_step_one_in_t;
 typedef struct {
 	int		found;
-	sos_obj_t	sos_obj;
+	int		status;
 } rpc_iter_step_one_out_t;
 int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
 			       rpc_iter_step_one_out_t *args_outp);

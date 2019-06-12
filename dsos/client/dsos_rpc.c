@@ -130,8 +130,8 @@ int dsos_rpc_ping_all(rpc_ping_in_t *args_inp, rpc_ping_out_t **args_outpp)
 	/* Copy in args to the request messages. */
 	now = nsecs_now();
 	for (i = 0; i < g.num_servers; ++i) {
-		req_all->reqs[i]->msg->u.hdr.type = DSOSD_MSG_PING_REQ;
-		req_all->reqs[i]->msg->u.ping_req.dump = args_inp->dump;
+		req_all->reqs[i]->msg->u.hdr.type       = DSOSD_MSG_PING_REQ;
+		req_all->reqs[i]->msg->u.ping_req.debug = args_inp->debug;
 		(*args_outpp)[i].nsecs = now;
 	}
 
@@ -783,12 +783,6 @@ int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
 				sos_value_free(v);
 				return E2BIG;
 			}
-#if 0
-			printf("Bo: attr_id %d: ", sos_attr_id(v->attr));
-			for (; p < buf; ++p) printf(" %02x", *p & 0xff);
-			printf("\n");
-			fflush(stdout);
-#endif
 			sos_value_put(v);
 			sos_value_free(v);
 		}
@@ -1013,6 +1007,40 @@ int dsos_rpc_iter_close(rpc_iter_close_in_t *args_inp, rpc_iter_close_out_t *arg
 	return dsos_err_status();
 }
 
+static void rpc_iter_step_all_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	char				*obj_data;
+	size_t				obj_sz;
+	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
+	dsos_ptr_tuple_t		*args = (dsos_ptr_tuple_t *)ctxt;
+	rpc_iter_step_all_in_t		*args_inp  = (rpc_iter_step_all_in_t  *)args->ptr1;
+	rpc_iter_step_all_out_t		*args_outp = (rpc_iter_step_all_out_t *)args->ptr2;
+	int				server_num = req->conn->server_id;
+
+	switch (resp->hdr.status) {
+	    case 0:
+		args_outp->found[server_num] = 1;
+		if (resp->hdr.flags & DSOSD_MSG_IMM) {
+			sos_obj_data_get(args_inp->sos_objs[server_num], &obj_data, &obj_sz);
+			memcpy(obj_data, resp->data, obj_sz);
+			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
+		} else {
+			dsos_debug("obj len %d from server %d\n", obj_sz, server_num);
+		}
+		break;
+	    case ENOENT:
+		args_outp->found[server_num] = 0;
+		break;
+	    default:
+		dsos_err_set(server_num, resp->hdr.status);
+		dsos_error("err %d from server %d\n", resp->hdr.status, server_num);
+		break;
+	}
+
+	if (!ods_atomic_dec(&req->req_all->num_reqs_pend))
+		sem_post(&req->req_all->sem);
+}
+
 int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_out_t *args_outp)
 {
 	int				i, ret;
@@ -1023,10 +1051,21 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 	dsos_req_all_t			*req_all;
 	dsosd_msg_iterator_step_req_t	*msg;
 	dsosd_msg_iterator_step_resp_t	*resp;
+	dsos_ptr_tuple_t		ctxt;
 
 	dsos_debug("op %d\n", args_inp->op);
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	/*
+	 * Allocate space for output args, which are filled in by the
+	 * individual server RPC callbacks (rpc_iter_step_all_cb()).
+	 */
+	args_outp->found = (int *)malloc(g.num_servers * sizeof(int));
+	if (!args_outp->found)
+		return ENOMEM;
+
+	ctxt.ptr1 = args_inp;
+	ctxt.ptr2 = args_outp;
+	req_all = dsos_req_all_async_new(rpc_iter_step_all_cb, &ctxt);
 
 	/* Copy in args to the request messages. */
 	if (args_inp->key) {
@@ -1055,35 +1094,15 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 		req->msg_len = sizeof(dsosd_msg_iterator_step_req_t) + msg->data_len;
 	}
 
+	dsos_err_clear();
 	ret = dsos_req_all_submit(req_all, 0);
 	if (ret)
 		return ret;
 
 	sem_wait(&req_all->sem);
 
-	/* Copy out results. */
-	args_outp->found = (int *)calloc(g.num_servers, sizeof(int));
-	if (!args_outp->found)
-		return ENOMEM;
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_iterator_step_resp_t *)req_all->reqs[i]->resp;
-		if (resp->hdr.status == 0) {
-			args_outp->found[i] = 1;
-			if (resp->hdr.flags & DSOSD_MSG_IMM) {
-				sos_obj_data_get(args_inp->sos_objs[i], &obj_data, &obj_sz);
-				memcpy(obj_data, resp->data, obj_sz);
-				dsos_debug("obj len %d from server %d inline\n", obj_sz, i);
-			} else {
-				dsos_debug("obj len %d from server %d\n", obj_sz, i);
-			}
-		} else if (resp->hdr.status != ENOENT) {
-			dsos_err_set(i, resp->hdr.status);
-			dsos_error("err %d from server %d\n", resp->hdr.status, i);
-		}
-	}
-
 	dsos_req_all_put(req_all);
+
 	return dsos_err_status();
 }
 
@@ -1097,19 +1116,32 @@ static void rpc_step_one_cb(dsos_req_t *req, size_t len, void *ctxt)
 {
 	size_t				obj_sz;
 	char				*obj_data;
-	rpc_iter_step_one_out_t		*args_outp = ctxt;
 	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
+	dsos_ptr_tuple_t		*args = (dsos_ptr_tuple_t *)ctxt;
+	rpc_iter_step_one_in_t		*args_inp  = args->ptr1;
+	rpc_iter_step_one_out_t		*args_outp = args->ptr2;
+	int				server_num = req->conn->server_id;
 
-	sos_obj_data_get(args_outp->sos_obj, &obj_data, &obj_sz);
-
-	if (resp && resp->hdr.flags & DSOSD_MSG_IMM) {
-		memcpy(obj_data, resp->data, resp->hdr2.obj_sz);
-		dsos_debug("req %p len %d copied to obj_data %p\n", req, len, obj_data);
-	} else {
-		dsos_debug("req %p len %d flushed\n", req, len);
+	switch (resp->hdr.status) {
+	    case 0:
+		args_outp->found = 1;
+		if (resp->hdr.flags & DSOSD_MSG_IMM) {
+			sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
+			memcpy(obj_data, resp->data, obj_sz);
+			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
+		} else {
+			dsos_debug("obj len %d from server %d\n", obj_sz, server_num);
+		}
+		break;
+	    case ENOENT:
+		args_outp->found = 0;
+		break;
+	    default:
+		args_outp->found  = 0;
+		args_outp->status = resp->hdr.status;
+		dsos_error("err %d from server %d\n", resp->hdr.status, server_num);
+		break;
 	}
-
-	args_outp->found = (resp->hdr.status == 0);
 
 	sem_post(&req->sem);
 }
@@ -1121,14 +1153,13 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 	char				*obj_data;
 	dsos_req_t			*req;
 	dsosd_msg_iterator_step_req_t	*msg;
-	dsosd_msg_iterator_step_resp_t	*resp;
+	dsos_ptr_tuple_t		ctxt;
 
 	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
 
-	req = dsos_req_new(rpc_step_one_cb, args_outp);
-
-	/* This is so the callback can see the object. */
-	args_outp->sos_obj = args_inp->sos_obj;
+	ctxt.ptr1 = args_inp;
+	ctxt.ptr2 = args_outp;
+	req = dsos_req_new(rpc_step_one_cb, &ctxt);
 
 	/* Copy in args to the request message. */
 	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
@@ -1146,5 +1177,5 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 
 	dsos_req_put(req);
 
-	return 0;
+	return args_outp->status;
 }
