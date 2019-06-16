@@ -1179,3 +1179,59 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 
 	return args_outp->status;
 }
+
+static void rpc_step_one_async_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	size_t				obj_sz;
+	char				*obj_data;
+	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
+	dsos_iter_t			*iter = (dsos_iter_t *)ctxt;
+	int				server_num = req->conn->server_id;
+
+	switch (resp->hdr.status) {
+	    case 0:
+		if (resp->hdr.flags & DSOSD_MSG_IMM) {
+			sos_obj_data_get(iter->sos_objs[server_num], &obj_data, &obj_sz);
+			memcpy(obj_data, resp->data, obj_sz);
+			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
+		} else {
+			dsos_debug("obj len %d from server %d\n", resp->hdr2.obj_sz, server_num);
+		}
+		break;
+	    case ENOENT:
+		dsos_debug("no obj from server %d\n", server_num);
+		break;
+	    default:
+		dsos_error("err %d from server %d\n", resp->hdr.status, server_num);
+		break;
+	}
+	/*
+	 * Call the iterator callback. This is only to avoid mixing
+	 * RPC- and API-layer abstractions.
+	 */
+	iter->cb(req, iter);
+}
+
+int dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
+{
+	size_t				obj_sz;
+	char				*obj_data;
+	dsos_req_t			*req;
+	dsosd_msg_iterator_step_req_t	*msg;
+
+	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
+
+	req = dsos_req_new(rpc_step_one_async_cb, args_inp->iter);
+	if (!req)
+		return ENOMEM;
+
+	/* Copy in args to the request message. */
+	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
+	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
+	msg->op          = args_inp->op;
+	msg->iter_handle = args_inp->iter_handle;
+	msg->hdr2.obj_va = (uint64_t)obj_data;
+	msg->hdr2.obj_sz = obj_sz;
+
+	return dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
+}

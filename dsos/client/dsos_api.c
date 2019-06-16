@@ -1,6 +1,7 @@
 #include "dsos_priv.h"
 
-static int iter_rbn_cmp_fn(void *tree_key, void *key);
+static void	iter_prefetch_cb(dsos_req_t *req, dsos_iter_t *iter);
+static int	iter_rbn_cmp_fn(void *tree_key, void *key);
 
 int dsos_ping(int server_num, struct dsos_ping_stats *stats)
 {
@@ -242,6 +243,7 @@ dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
 	iter->last_op   = DSOSD_MSG_ITER_OP_NONE;
 	iter->done      = 0;
 	iter->last_srvr = -1;
+	iter->cb        = iter_prefetch_cb;
 	iter->obj_sz    = schema->sos_schema->data->obj_sz + schema->sos_schema->data->array_data_sz;
 	iter->sos_objs  = calloc(g.num_servers, sizeof(sos_obj_t));
 	if (!iter->sos_objs)
@@ -305,11 +307,11 @@ static int iter_rbt_min(dsos_iter_t *iter)
 
 	if (rbn) {
 		ret = rbn->server_num;
+		dsos_debug("iter %p min value %ld from server %d\n",
+			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_, ret);
 		rbt_del(&iter->rbt, (struct rbn *)rbn);
 		sos_value_put(rbn->rbn.key);
 		sos_value_free(rbn->rbn.key);
-		dsos_debug("iter %p min value %ld from server %d\n",
-			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_, ret);
 		free(rbn);
 	} else
 		dsos_debug("iter %p rbt empty\n");
@@ -355,9 +357,60 @@ static int iter_reset(dsos_iter_t *iter)
 	return 0;
 }
 
+static void iter_prefetch_cb(dsos_req_t *req, dsos_iter_t *iter)
+{
+	dsos_debug("iter %p req %p status %d from server %d\n",
+		   iter, req, req->resp->u.hdr.status, req->conn->server_id);
+
+	if (iter->done)
+		return;
+
+	switch (req->resp->u.hdr.status) {
+	    case 0:
+		iter_insert_obj(iter, req->conn->server_id);
+		iter->status = 0;
+		break;
+	    case ENOENT:
+		iter->status = 0;
+		break;
+	    default:
+		iter->status = req->resp->u.hdr.status;
+		break;
+	}
+	sem_post(&iter->sem);
+}
+
+static int iter_prefetch(dsos_iter_t *iter)
+{
+	int			server_num;
+	rpc_iter_step_one_in_t	args_in;
+
+	if (iter->done)
+		return 0;
+
+	server_num = iter->last_srvr;
+
+	iter->sos_objs[server_num] = sos_obj_malloc(iter->schema->sos_schema);
+	if (!iter->sos_objs[server_num])
+		return ENOMEM;
+
+	args_in.op          = DSOSD_MSG_ITER_OP_NEXT;
+	args_in.iter_handle = iter->handles[server_num];
+	args_in.sos_obj     = iter->sos_objs[server_num];
+	args_in.server_num  = server_num;
+	args_in.iter        = iter;
+
+	sem_init(&iter->sem, 0, 0);
+
+	dsos_debug("from server %d into sos_obj %p iter %p\n", server_num, args_in.sos_obj, iter);
+
+	return dsos_rpc_iter_step_one_async(&args_in);
+}
+
 sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 {
 	int			i, ret;
+	sos_obj_t		obj;
 	rpc_iter_step_all_in_t	args_in;
 	rpc_iter_step_all_out_t	args_out;
 
@@ -377,12 +430,15 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 	}
 	free(args_out.found);
 
-	return iter_remove_min(iter);
+	obj = iter_remove_min(iter);
+	iter_prefetch(iter);
+	return obj;
 }
 
 sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 {
 	int			ret, server_num;
+	sos_obj_t		obj;
 	rpc_iter_step_one_in_t	args_in;
 	rpc_iter_step_one_out_t	args_out;
 
@@ -391,25 +447,15 @@ sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 	if (iter->done)
 		return NULL;
 
-	server_num = iter->last_srvr;
+	/* Wait for the previously prefetched object. */
+	sem_wait(&iter->sem);
 
-	iter->sos_objs[server_num] = sos_obj_malloc(iter->schema->sos_schema);
-	if (!iter->sos_objs[server_num])
+	if (iter->status)
 		return NULL;
 
-	args_in.op          = DSOSD_MSG_ITER_OP_NEXT;
-	args_in.iter_handle = iter->handles[iter->last_srvr];
-	args_in.sos_obj     = iter->sos_objs[server_num];
-	args_in.server_num  = server_num;
-
-	ret = dsos_rpc_iter_step_one(&args_in, &args_out);
-	if (ret)
-		return NULL;
-
-	if (args_out.found)
-		iter_insert_obj(iter, server_num);
-
-	return iter_remove_min(iter);
+	obj = iter_remove_min(iter);
+	iter_prefetch(iter);
+	return obj;
 }
 
 sos_obj_t dsos_iter_find(dsos_iter_t *iter, sos_key_t key)

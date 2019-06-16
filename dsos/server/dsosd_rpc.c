@@ -817,6 +817,8 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 	else
 		dsosd_req_complete_with_status(client, DSOSD_MSG_ITERATOR_STEP_RESP, msg->hdr.id,
 					       sizeof(dsosd_msg_iterator_step_resp_t), ret);
+	if (key)
+		sos_key_put(key);
 }
 
 // taken from https://stackoverflow.com/questions/779875/what-is-the-function-to-replace-string-in-c

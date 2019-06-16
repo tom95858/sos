@@ -130,6 +130,7 @@ typedef struct dsos_schema_s {
 /*
  * DSOS iteration object.
  */
+typedef void (*dsos_iter_prefetch_cb_t)(dsos_req_t *, dsos_iter_t *);
 struct iter_rbn {
 	struct rbn	rbn;
 	int		server_num;
@@ -141,9 +142,12 @@ typedef struct dsos_iter_s {
 	int		done;                 // =1 when all servers are done w/the iteration
 	int		last_op;              // last iter op (begin,end,prev,next)
 	int		last_srvr;            // server from which the last obj was returned
+	int		status;               // status of last prefetch
 	size_t		obj_sz;               // object size this iterates over
 	sos_obj_t	*sos_objs;            // vector of recvd objs
+	sem_t		sem;                  // signals when prefetched object is available
 	struct rbt	rbt;                  // for finding min key value of recvd objs
+	dsos_iter_prefetch_cb_t	cb;           // callback for prefetched-obj arrival
 } dsos_iter_t;
 
 /*
@@ -358,6 +362,7 @@ int	dsos_rpc_iter_close(rpc_iter_close_in_t  *args_inp,
 typedef struct {
 	dsosd_handle_t	iter_handle;
 	int		op;
+	dsos_iter_t	*iter;
 	sos_obj_t	sos_obj;
 	int		server_num;
 } rpc_iter_step_one_in_t;

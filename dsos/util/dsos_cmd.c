@@ -430,7 +430,7 @@ int do_iter(int ac, char *av[])
 	iter = dsos_iter_new(schema, attr);
 	if (!iter) {
 		printf("could not create iter\n");
-		exit(1);
+		return 1;
 	}
 
 	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {

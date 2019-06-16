@@ -44,7 +44,7 @@ class Test:
         out = check_output([dsos_cmd, "schema", "--cont", self.contnm, "--schema", self.name, "--dump"],
                            stderr=STDOUT).strip()
         if out != self.template:
-            raise Exception(["dumped schema incorrect: expected", self.template, "got", out])
+            raise Exception("dumped schema incorrect: expected ", self.template, " got ", out)
 
     def doCsv(self):
         print "creating csv file with", self.num_recs, "records"
@@ -83,10 +83,10 @@ class Test:
                 f = open("out", "w");
                 print [dsos_cmd, "iter", "--cont", self.contnm, "--schema", self.name, "--attr", n]
                 check_call([dsos_cmd, "iter", "--cont", self.contnm, "--schema", self.name, "--attr", n],
-                           stdout=f, stderr=f)
+                           stdout=f)
                 f.close()
                 f = open("csv-sorted", "w");
-                check_call(["sort", "-n", "-t,", "--key="+str(i)+","+str(i), "csv"], stdout=f, stderr=f)
+                check_call(["sort", "-n", "-t,", "--key="+str(i)+","+str(i), "csv"], stdout=f)
                 f.close()
                 check_call(["diff", "csv-sorted", "out"], stderr=STDOUT)
                 i += 1
@@ -104,11 +104,11 @@ class Test:
             for rec in recs:
                 rec = rec.strip()
                 val = rec.split(",")[i]
-#                print [dsos_cmd, "find", "--cont", self.contnm, "--schema", self.name, n+"="+val ]
+                print [dsos_cmd, "find", "--cont", self.contnm, "--schema", self.name, n+"="+val ]
                 out = check_output([dsos_cmd, "find", "--cont", self.contnm, "--schema", self.name, n+"="+val ],
                                    stderr=STDOUT).strip()
                 if out != rec:
-                    raise Exception(["could not find object: attr", n, "val", val, "\nwant:", rec, "\ngot: ", out])
+                    raise Exception("could not find object: attr ", n, " val ", val, "\nwant: ", rec, "\ngot: ", out)
             i += 1
         del recs
 
@@ -117,30 +117,20 @@ if __name__ == "__main__":
         if "DSOS_CONFIG" not in os.environ:
             raise Exception("must set $DSOS_CONFIG")
 
-        t = Test("test", OrderedDict([ ("*seq","uint64"),
-                                       ("*int1","uint64"),
-                                       ("*int2","uint64"),
-                                       ("*int3","uint64"),
-                                       ("data","char[9000]") ]))
-        t.cont("/tmp/cont-py-%%.sos")
-        t.doIter()
-#        t.doTest()
-        del t
-
-#        for sz in range(1900,2048):
-#        for sz in range(2048,2100):
-#        for sz in range(2100,3100):
-#        for sz in range(9000,9010):
-#            t = Test("test{}".format(sz), OrderedDict([ ("*seq","uint64"),
-#                                                        ("*int1","uint64"),
-#                                                        ("*int2","uint64"),
-#                                                        ("data","char[{}]".format(sz)) ]))
-#            t.numRecs(10000);
-#            t.doTest()
-#            del t
+        for sz in range(16,9000):
+            t = Test("test{}".format(sz), OrderedDict([ ("*seq","uint64"),
+                                                        ("*int1","uint64"),
+                                                        ("*int2","uint64"),
+                                                        ("*int3","uint64"),
+                                                        ("data","char[{}]".format(sz)) ]))
+            t.numRecs(100)
+            t.cont("/tmp/cont-py-%%.sos")
+            t.doCont()
+            t.doTest()
+            del t
 
     except CalledProcessError as e:
         print "Command " + " ".join(e.cmd) + " failed with status " + str(e.returncode) + ":"
         print e.output
     except Exception as inst:
-        print " ".join(inst.args[0])
+        print inst.args
