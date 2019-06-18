@@ -387,7 +387,7 @@ int	dsos_rpc_iter_step_all(rpc_iter_step_all_in_t  *args_inp,
 
 /* Internal API. */
 int		dsos_config_read(const char *config_file);
-int		dsos_connect(const char *host, const char *service, int server_id);
+int		dsos_connect(const char *host, const char *service, int server_id, int wait);
 void		dsos_disconnect(void);
 void		dsos_err_clear(void);
 void		dsos_err_set(int server_id, int status);

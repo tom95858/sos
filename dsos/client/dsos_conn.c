@@ -93,26 +93,30 @@ const char *dsos_msg_type_to_str(int id)
 
 static void client_cb(zap_ep_t ep, zap_event_t ev)
 {
-	dsos_req_t		*req;
-	dsosd_msg_t		*resp;
-	struct sockaddr_in	lsin;
-	struct sockaddr_in	rsin;
-	socklen_t		slen;
-	char			mybuf[16];
-	dsos_conn_t		*conn = (dsos_conn_t *)zap_get_ucontext(ep);
+	dsos_req_t	*req;
+	dsosd_msg_t	*resp;
+	dsos_conn_t	*conn = (dsos_conn_t *)zap_get_ucontext(ep);
 
 	switch (ev->type) {
 	    case ZAP_EVENT_CONNECTED:
+	    {
+#ifdef DSOS_DEBUG
+		struct sockaddr_in	lsin;
+		struct sockaddr_in	rsin;
+		socklen_t		slen;
+		char			mybuf[16];
+
 		slen = sizeof(rsin);
 		zap_get_name(ep, (void *)&lsin, (void *)&rsin, &slen);
 		inet_ntop(rsin.sin_family, &rsin.sin_addr, mybuf, sizeof(mybuf));
 		dsos_debug("connected: %s:%d (rsin)\n", mybuf, ntohs(rsin.sin_port));
 		inet_ntop(lsin.sin_family, &lsin.sin_addr, mybuf, sizeof(mybuf));
 		dsos_debug("connected: %s:%d (lsin)\n", mybuf, ntohs(rsin.sin_port));
-
+#endif
 		conn->conn_status = 0;
 		sem_post(&conn->conn_sem);
 		break;
+	    }
 	    case ZAP_EVENT_DISCONNECTED:
 		dsos_debug("ZAP_EVENT_DISCONNECTED ep %p conn %p\n", ep, conn);
 		sem_post(&conn->conn_sem);
@@ -120,7 +124,6 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 	    case ZAP_EVENT_REJECTED:
 	    case ZAP_EVENT_CONNECT_ERROR:
 		dsos_error("connect error ep %p status %d\n", ep, ev->status);
-		zap_free(ep);
 		conn->conn_status = ev->status;
 		sem_post(&conn->conn_sem);
 		break;
@@ -132,21 +135,16 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 			   dsos_msg_type_to_str(resp->u.hdr.type), conn->server_id,
 			   req, resp, ev->data_len, resp->u.hdr.id, resp->u.hdr.type,
 			   resp->u.hdr.status, resp->u.hdr.flags, conn);
-		if (!req)  {
+		if (!req)
 			dsos_fatal("no req for id %ld from server %d\n", resp->u.hdr.id, conn->server_id);
-			break;
-		}
 		// On send, req->msg points to a send buffer (malloc'd by dsos_req_new but
 		// eventually to be provided by zap_send_alloc()) which is invalid after the
 		// send is posted by dsos_req_submit(). Here, req->resp points to the response
 		// that just came in. That buffer is invalid after the callback below returns.
-		// So if this response is part of an N-fanout request, that request's callback
-		// won't get called until later so that callback is responsible for copying
-		// the response. This is acceptable because these are for slow-path operations.
 		req->resp_len = ev->data_len;
 		req->cb(req, ev->data_len, req->ctxt);
-		// Don't be tempted to call dsos_req_put() now. For an N-fanout req it needs
-		// to live until the req_all is complete.
+		// Don't be tempted to call dsos_req_put() now. For a vector-RPC req it needs
+		// to live until the dsos_req_all_t is complete.
 		break;
 	    case ZAP_EVENT_READ_COMPLETE:
 	    case ZAP_EVENT_WRITE_COMPLETE:
@@ -160,7 +158,7 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 	dsos_debug("done\n");
 }
 
-int dsos_connect(const char *host, const char *service, int server_id)
+int dsos_connect(const char *host, const char *service, int server_id, int wait)
 {
 	int			ret;
 	zap_err_t		zerr;
@@ -187,15 +185,18 @@ int dsos_connect(const char *host, const char *service, int server_id)
 	freeaddrinfo(ai);
 
 	sem_init(&conn->conn_sem, 0, 0);
+	conn->conn_status = 0;
 	zerr = zap_connect(conn->ep, (struct sockaddr *)&sin, sizeof(sin), NULL, 0);
 	if (zerr) {
 		dsos_error("could not connect to server %s:%s zerr %d %s\n",
 			   host, service, zerr, zap_err_str(zerr));
 		return zerr;
 	}
-	sem_wait(&conn->conn_sem);
-
-	return conn->conn_status;
+	if (wait) {
+		sem_wait(&conn->conn_sem);
+		return conn->conn_status;
+	}
+	return 0;
 }
 
 void dsos_disconnect(void)

@@ -55,13 +55,16 @@ int dsos_init(const char *config_filename)
 	if (!g.zap)
 		return ENETDOWN;
 
-	dsos_err_clear();
 	for (i = 0; i < g.num_servers; ++i) {
-		ret = dsos_connect(g.conns[i].host, g.conns[i].service, g.conns[i].server_id);
-		dsos_err_set(i, ret);
+		ret = dsos_connect(g.conns[i].host, g.conns[i].service, g.conns[i].server_id, 0);
 		if (ret)
 			dsos_error("err %d (%s) connecting to server %d at %s:%s\n",
 				   ret, zap_err_str(ret), i, g.conns[i].host, g.conns[i].service);
+	}
+	dsos_err_clear();
+	for (i = 0; i < g.num_servers; ++i) {
+		sem_wait(&g.conns[i].conn_sem);
+		dsos_err_set(i, g.conns[i].conn_status);
 	}
 	if (dsos_err_status())
 		return ECONNREFUSED;
