@@ -155,31 +155,18 @@ static void handle_connect_req(zap_ep_t ep)
 {
 	dsosd_client_t	*client;
 
-	client = dsosd_client_new(ep);
 	zap_accept(ep, server_cb, NULL, 0);
+	client = dsosd_client_new(ep);
+	if (!client) {
+		dsosd_error("closing ep %p for no resources\n", ep);
+		zap_close(ep);
+		return;
+	}
 	zap_set_ucontext(ep, client);
-
-#if 1
-	// XXX map a heap we can RMA in to. This is temporary, until
-	// SOS can provide for RMA directly to/from objects.
-	client->heap_sz  = 4 * 1024 * 1024;
-	client->heap_buf = malloc(client->heap_sz);
-	zap_err_t zerr = zap_map(ep, &client->lmap, client->heap_buf, client->heap_sz, ZAP_ACCESS_NONE);
-	if (zerr)
-		dsosd_fatal("zap_map err %d %s\n", zerr, zap_err_str(zerr));
-	client->heap = mm_new(client->heap_buf, client->heap_sz, 64);
-	if (!client->heap)
-		dsosd_fatal("could not create shared heap\n");
-#endif
 }
 
 static void handle_connected(zap_ep_t ep)
 {
-	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
-
-	pthread_mutex_init(&client->idx_rbt_lock, 0);
-	rbt_init(&client->idx_rbt, idx_rbn_cmp_fn);
-
 	++g.stats.tot_num_connects;
 	++g.num_clients;
 
@@ -211,13 +198,6 @@ static void handle_disconnected(zap_ep_t ep)
 	inet_ntop(rsin.sin_family, &rsin.sin_addr, mybuf, sizeof(mybuf));
 	dsosd_debug("disconnect %s:%d\n", mybuf, ntohs(rsin.sin_port));
 #endif
-#if 1
-	// XXX
-	if (client->lmap)
-		zap_unmap(ep, client->lmap);
-	if (client->heap_buf)
-		free(client->heap_buf);
-#endif
 	dsosd_client_put(client);
 	zap_free(ep);
 	--g.num_clients;
@@ -243,7 +223,7 @@ static void handle_rendezvous(zap_ep_t ep, zap_map_t map, void *buf, size_t len)
 }
 
 // we get here as part of a create-object req
-// the rma from the client is complete, finish the req
+// the rma-read from the client is complete, finish the req
 static void handle_read_complete(zap_ep_t ep, void *ctxt)
 {
 	int		ret;
@@ -254,17 +234,13 @@ static void handle_read_complete(zap_ep_t ep, void *ctxt)
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 #if 1
-	/*
-	 * Until SOS can map the mmap backing objects, copy the object
-	 * from a temp buffer to the real object store. We'll RMA-read
-	 * directly into the object once SOS is capable of mapping it.
-	 */
+	/* Remove this once SOS can map objects directly. */
 	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
 	memcpy(obj_data, req->rma_buf, req->resp->u.obj_create_resp.len);
 	mm_free(client->heap, req->rma_buf);
+#endif
 	req->rma_buf = NULL;
 	*(uint64_t *)obj_data = sos_schema_id(obj->schema);
-#endif
 	ret = sos_obj_index(obj);
 	if (ret)
 		dsosd_error("ep %p sos_obj_index ret %d\n", ret);
@@ -277,7 +253,7 @@ static void handle_read_complete(zap_ep_t ep, void *ctxt)
 }
 
 // we get here as part of an RMA-write of a SOS obj to the client
-// the rma from the client is complete, finish the req
+// the rma-write to the client is complete, finish the req
 static void handle_write_complete(zap_ep_t ep, void *ctxt)
 {
 	dsosd_req_t	*req    = (dsosd_req_t *)ctxt;
@@ -458,6 +434,16 @@ static void dsosd_log(const char *fmt, ...)
 	pthread_mutex_unlock(&log_lock);
 }
 
+static int idx_rbn_cmp_fn(void *tree_key, void *key)
+{
+	return strcmp(tree_key, key);
+}
+
+static int handle_rbn_cmp_fn(void *tree_key, void *key)
+{
+	return (uint64_t)tree_key - (uint64_t)key;
+}
+
 dsosd_client_t *dsosd_client_new(zap_ep_t ep)
 {
 	dsosd_client_t	*client;
@@ -466,11 +452,42 @@ dsosd_client_t *dsosd_client_new(zap_ep_t ep)
 	if (!client)
 		dsosd_fatal("out of memory");
 
-	client->refcount = 1;  // start with a reference
-	client->ep       = ep;
+	client->refcount    = 1;  // start with a reference
+	client->ep          = ep;
+	client->next_handle = 0x1b0b0b0b0ul;
 
+	pthread_mutex_init(&client->idx_rbt_lock, 0);
+	rbt_init(&client->idx_rbt, idx_rbn_cmp_fn);
+	rbt_init(&client->handle_rbt, handle_rbn_cmp_fn);
+#if 1
+	/*
+	 * XXX Until SOS can provide for RMA directly to or from a
+	 * container-backed object, each client allocates a heap for
+	 * RMA. For object creation, new objects are RMA-read from
+	 * the client into this heap and then copied into the actual
+	 * SOS object. For object retrieval, existing SOS objects are
+	 * copied into this heap and then RMA-written to the client.
+	 */
+	client->heap_sz  = 4 * 1024 * 1024;
+	client->heap_buf = malloc(client->heap_sz);
+	if (!client->heap_buf)
+		goto err;
+	zap_err_t zerr = zap_map(ep, &client->lmap, client->heap_buf, client->heap_sz, ZAP_ACCESS_NONE);
+	if (zerr) {
+		dsosd_error("zap_map err %d %s\n", zerr, zap_err_str(zerr));
+		goto err;
+	}
+	client->heap = mm_new(client->heap_buf, client->heap_sz, 64);
+	if (!client->heap) {
+		dsosd_error("could not create shared heap\n");
+		goto err;
+	}
+#endif
 	dsosd_debug("%p\n", client);
 	return client;
+ err:
+	dsosd_client_put(client);
+	return NULL;
 }
 
 void dsosd_client_get(dsosd_client_t *client)
@@ -481,12 +498,21 @@ void dsosd_client_get(dsosd_client_t *client)
 
 void dsosd_client_put(dsosd_client_t *client)
 {
-	dsosd_debug("%p refcount was %d\n", client, client->refcount);
-	if (!ods_atomic_dec(&client->refcount))
-		free(client);
-}
+	struct ptr_rbn	*rbn;
 
-int idx_rbn_cmp_fn(void *tree_key, void *key)
-{
-	return strcmp(tree_key, key);
+	dsosd_debug("%p refcount was %d\n", client, client->refcount);
+	if (!ods_atomic_dec(&client->refcount)) {
+#if 1
+		// XXX
+		if (client->lmap)
+			zap_unmap(client->ep, client->lmap);
+		if (client->heap_buf)
+			free(client->heap_buf);
+#endif
+		while ((rbn = (struct ptr_rbn *)rbt_min(&client->handle_rbt))) {
+			rbt_del(&client->handle_rbt, (struct rbn *)rbn);
+			free(rbn);
+		}
+		free(client);
+	}
 }

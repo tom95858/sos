@@ -6,14 +6,44 @@ static void	*rpc_serialize_schema(sos_schema_t schema, void *buf, size_t *psz);
 static void	rpc_free_schema_template(sos_schema_template_t t);
 static void	dump_schema_template(sos_schema_template_t t);
 
-static dsosd_handle_t dsosd_ptr_to_handle(void *ptr)
+static dsosd_handle_t dsosd_ptr_to_handle(dsosd_client_t *client, void *ptr)
 {
-	return (dsosd_handle_t)ptr;
+	struct ptr_rbn	*rbn;
+	dsosd_handle_t	handle = client->next_handle++;
+
+	rbn = calloc(1, sizeof(struct ptr_rbn));
+	if (!rbn)
+		dsosd_fatal("out of memory\n");
+	rbn_init((struct rbn *)rbn, (void *)handle);
+	rbn->ptr = ptr;
+	rbt_ins(&client->handle_rbt, (void *)rbn);
+	dsosd_debug("client %p ptr %p assigned handle %ld\n", client, ptr, handle);
+
+	return handle;
 }
 
-static void *dsosd_handle_to_ptr(dsosd_handle_t handle)
+static void *dsosd_handle_to_ptr(dsosd_client_t *client, dsosd_handle_t handle)
 {
-	return (void *)handle;
+	struct ptr_rbn	*rbn;
+
+	rbn = (struct ptr_rbn *)rbt_find(&client->handle_rbt, (void *)handle);
+	if (!rbn) {
+		dsosd_error("client %p handle %ld not found\n", client, handle);
+		return NULL;
+	}
+	dsosd_debug("client %p handle %ld is ptr %p\n", client, handle, rbn->ptr);
+	return rbn->ptr;
+}
+
+static void dsosd_handle_free(dsosd_client_t *client, dsosd_handle_t handle)
+{
+	struct ptr_rbn	*rbn;
+
+	rbn = (struct ptr_rbn *)rbt_find(&client->handle_rbt, (void *)handle);
+	if (rbn) {
+		rbt_del(&client->handle_rbt, (struct rbn *)rbn);
+		free(rbn);
+	}
 }
 
 void rpc_handle_ping(zap_ep_t ep, dsosd_msg_ping_req_t *msg, size_t len)
@@ -48,7 +78,7 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 	dsosd_debug("ep %p msg %p len %d obj: va %p len %d handle %p\n",
 		    ep, msg, len, msg->hdr2.obj_va, msg->hdr2.obj_sz, msg->schema_handle);
 
-	schema = dsosd_handle_to_ptr(msg->schema_handle);
+	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
 
 	req = dsosd_req_new(client, DSOSD_MSG_OBJ_CREATE_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_obj_create_resp_t));
@@ -158,7 +188,7 @@ void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg,
 	req = dsosd_req_new(client, DSOSD_MSG_CONTAINER_OPEN_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_container_open_resp_t));
 	if (cont)
-		req->resp->u.container_open_resp.handle = dsosd_ptr_to_handle(cont);
+		req->resp->u.container_open_resp.handle = dsosd_ptr_to_handle(client, cont);
 	else
 		req->resp->u.hdr.status = ENOENT;
 
@@ -203,7 +233,7 @@ void rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *ms
 	struct ptr_rbn		*rbn;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = (sos_t)dsosd_handle_to_ptr(msg->handle);
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->handle);
 
 	dsosd_debug("ep %d msg %p len %d: cont %p\n", ep, msg, len, msg->handle);
 
@@ -219,6 +249,7 @@ void rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *ms
 	}
 
 	sos_container_close(cont, SOS_COMMIT_SYNC);
+	dsosd_handle_free(client, msg->handle);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_CONTAINER_CLOSE_RESP, msg->hdr.id,
 				       sizeof(dsosd_msg_container_close_resp_t), 0);
@@ -233,14 +264,14 @@ void rpc_handle_schema_by_name(zap_ep_t ep, dsosd_msg_schema_by_name_req_t *msg,
 	sos_schema_t		schema;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = (sos_t)dsosd_handle_to_ptr(msg->cont_handle);
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
 
 	req = dsosd_req_new(client, DSOSD_MSG_SCHEMA_BY_NAME_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_schema_by_name_resp_t));
 
 	schema = sos_schema_by_name(cont, msg->name);
 	if (schema) {
-		req->resp->u.schema_by_name_resp.handle = dsosd_ptr_to_handle(schema);
+		req->resp->u.schema_by_name_resp.handle = dsosd_ptr_to_handle(client, schema);
 		sz = sizeof(req->resp->u.schema_by_name_resp.templ);
 		p = rpc_serialize_schema(schema,
 					 req->resp->u.schema_by_name_resp.templ,
@@ -264,8 +295,8 @@ void rpc_handle_schema_add(zap_ep_t ep, dsosd_msg_schema_add_req_t *msg, size_t 
 	sos_schema_t		schema;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont   = (sos_t)dsosd_handle_to_ptr(msg->cont_handle);
-	schema = (sos_schema_t)dsosd_handle_to_ptr(msg->schema_handle);
+	cont   = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
+	schema = (sos_schema_t)dsosd_handle_to_ptr(client, msg->schema_handle);
 
 	ret = sos_schema_add(cont, schema);
 
@@ -282,7 +313,7 @@ void rpc_handle_part_create(zap_ep_t ep, dsosd_msg_part_create_req_t *msg, size_
 	sos_t			cont;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = (sos_t)dsosd_handle_to_ptr(msg->cont_handle);
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
 
 	if (!msg->path[0])
 		ret = sos_part_create(cont, msg->name, NULL);
@@ -304,14 +335,14 @@ void rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t le
 	sos_part_t		part;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = (sos_t)dsosd_handle_to_ptr(msg->cont_handle);
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
 
 	req = dsosd_req_new(client, DSOSD_MSG_PART_FIND_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_part_find_resp_t));
 
 	part = sos_part_find(cont, msg->name);
 	if (part)
-		req->resp->u.part_find_resp.handle = dsosd_ptr_to_handle(part);
+		req->resp->u.part_find_resp.handle = dsosd_ptr_to_handle(client, part);
 	else
 		req->resp->u.hdr.status = ENOENT;
 
@@ -327,7 +358,7 @@ void rpc_handle_part_set_state(zap_ep_t ep, dsosd_msg_part_set_state_req_t *msg,
 	sos_part_t		part;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	part = (sos_part_t)dsosd_handle_to_ptr(msg->handle);
+	part = (sos_part_t)dsosd_handle_to_ptr(client, msg->handle);
 
 	ret = sos_part_state_set(part, msg->new_state);
 
@@ -359,7 +390,7 @@ void rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_template
 
 	schema = sos_schema_from_template(template);
 	if (schema)
-		req->resp->u.schema_from_template_resp.handle = dsosd_ptr_to_handle(schema);
+		req->resp->u.schema_from_template_resp.handle = dsosd_ptr_to_handle(client, schema);
 	else
 		req->resp->u.hdr.status = EINVAL;
  out:
@@ -626,8 +657,8 @@ void rpc_handle_obj_index(zap_ep_t ep, dsosd_msg_obj_index_req_t *msg, size_t le
 	dsosd_req_t	*req;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	schema = dsosd_handle_to_ptr(msg->schema_handle);
-	cont   = dsosd_handle_to_ptr(msg->cont_handle);
+	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
+	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
 
 	buf     = msg->data;
 	buf_len = msg->data_len;
@@ -663,8 +694,8 @@ void rpc_handle_obj_find(zap_ep_t ep, dsosd_msg_obj_find_req_t *msg, size_t len)
 	dsosd_req_t	*req;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	schema = dsosd_handle_to_ptr(msg->schema_handle);
-	cont   = dsosd_handle_to_ptr(msg->cont_handle);
+	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
+	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
 	attr   = sos_schema_attr_by_id(schema, msg->attr_id);
 
 	buf     = msg->data;
@@ -701,7 +732,7 @@ void rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len)
 	dsosd_req_t	*req;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = dsosd_handle_to_ptr(msg->cont_handle);
+	cont = dsosd_handle_to_ptr(client, msg->cont_handle);
 
 	/* Use the ODS from the primary partition in the given container. */
 	primary = __sos_primary_obj_part(cont);
@@ -727,8 +758,9 @@ void rpc_handle_iterator_close(zap_ep_t ep, dsosd_msg_iterator_close_req_t *msg,
 	sos_iter_t	iter;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	iter = (sos_iter_t)dsosd_handle_to_ptr(msg->iter_handle);
+	iter = (sos_iter_t)dsosd_handle_to_ptr(client, msg->iter_handle);
 	sos_iter_free(iter);
+	dsosd_handle_free(client, msg->iter_handle);
 
 	dsosd_debug("ep %d msg %p len %d iter %p\n", ep, msg, len, iter);
 
@@ -748,13 +780,13 @@ void rpc_handle_iterator_new(zap_ep_t ep, dsosd_msg_iterator_new_req_t *msg, siz
 	req = dsosd_req_new(client, DSOSD_MSG_ITERATOR_NEW_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_iterator_new_resp_t));
 
-	cont   = dsosd_handle_to_ptr(msg->cont_handle);
-	schema = dsosd_handle_to_ptr(msg->schema_handle);
+	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
+	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
 	attr   = sos_schema_attr_by_id(schema, msg->attr_id);
 
 	iter = sos_attr_iter_new(attr);
 	if (iter)
-		req->resp->u.iterator_new_resp.iter_handle = dsosd_ptr_to_handle(iter);
+		req->resp->u.iterator_new_resp.iter_handle = dsosd_ptr_to_handle(client, iter);
 	else
 		req->resp->u.hdr.status = ENOENT;
 
@@ -783,7 +815,7 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 		sos_key_set(key, key_data, key_len);
 	}
 
-	iter = dsosd_handle_to_ptr(msg->iter_handle);
+	iter = dsosd_handle_to_ptr(client, msg->iter_handle);
 	switch (msg->op) {
 	    case DSOSD_MSG_ITER_OP_BEGIN:
 		ret = sos_iter_begin(iter);

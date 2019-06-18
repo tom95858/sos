@@ -72,20 +72,25 @@ struct ptr_rbn {
 
 /*
  * Client object. This encapsulates all state created on behalf of the
- * client.
+ * client. There are two heaps. One is on the client and is shared
+ * with every server. The other is on the server and is used for
+ * object RMA to/from the client heap; the server heap may go away in
+ * the future if SOS can be enhanced for RMA.
  */
 typedef struct dsosd_client_s {
 	ods_atomic_t		refcount;
 	zap_ep_t		ep;            // zap active endpoint
-	zap_map_t		rmap;          // map for shared heap
+	zap_map_t		rmap;          // map for shared client heap
 	struct rbt		idx_rbt;       // maps idx name -> sos_index_t
 	pthread_mutex_t		idx_rbt_lock;
+	struct rbt		handle_rbt;    // maps handles to pointers
+	uint64_t		next_handle;   // next handle # to give out
 #if 1
 	// XXX temporary, until SOS can alloc from reg mem
-	mm_region_t		heap;          // heap shared w/servers
+	mm_region_t		heap;          // mapped heap for object RMA
 	zap_map_t		lmap;          // local map
-	char			*heap_buf;     // registered buffer for heap
-	size_t			heap_sz;       // size of heap
+	char			*heap_buf;     // mapped buffer for heap
+	size_t			heap_sz;       // size of mapped heap
 #endif
 } dsosd_client_t;
 
@@ -96,7 +101,6 @@ zap_err_t	dsosd_req_complete(dsosd_req_t *req, size_t len);
 void		dsosd_req_get(dsosd_req_t *req);
 dsosd_req_t	*dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t msg_len);
 void		dsosd_req_put(dsosd_req_t *req);
-int		idx_rbn_cmp_fn(void *tree_key, void *key);
 char		*str_replace(char *orig, char *rep, char *with);
 
 sos_schema_template_t	rpc_deserialize_schema_template(char *buf, size_t len);
