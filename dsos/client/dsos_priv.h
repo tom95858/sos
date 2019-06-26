@@ -86,7 +86,6 @@ typedef struct dsos_req_s {
 typedef void (*dsos_req_all_cb_t)(dsos_req_all_t *, void *);  // response callback fn
 typedef struct dsos_req_all_s {
 	ods_atomic_t		refcount;
-	size_t			msg_len_max;   // max size of msg (for send)
 	dsos_req_all_cb_t	cb;            // response callback
 	void			*ctxt;         // for callbacks
 	ods_atomic_t		num_reqs_pend; // # reqs still pending
@@ -419,7 +418,7 @@ void		*dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz);
 			__ods_log_fp = stderr;					\
 		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
-		sleep(1);							\
+		sleep(1000000);							\
 		exit(1);							\
 	} while (0);
 

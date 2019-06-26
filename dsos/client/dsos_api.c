@@ -101,7 +101,7 @@ int dsos_container_close(dsos_t *cont)
 	ret = dsos_rpc_container_close(&args_in, &args_out);
 
 	free(cont->handles);
-	cont->handles = NULL;
+	free(cont);
 
 	return ret;
 }

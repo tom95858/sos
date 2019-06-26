@@ -17,11 +17,6 @@ dsos_obj_t *dsos_obj_alloc(dsos_schema_t *schema, dsos_obj_cb_t cb, void *ctxt)
 	if (!req)
 		return NULL;
 
-	msg = (dsosd_msg_obj_create_req_t *)req->msg;
-	msg->hdr.type   = DSOSD_MSG_OBJ_CREATE_REQ;
-	msg->hdr.flags  = 0;
-	msg->hdr.status = 0;
-
 	obj->flags   = 0;
 	obj->req_all = NULL;
 	obj->req     = req;

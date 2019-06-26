@@ -168,7 +168,7 @@ void dsos_req_get(dsos_req_t *req)
 void dsos_req_put(dsos_req_t *req)
 {
 	if (!ods_atomic_dec(&req->refcount)) {
-		dsos_debug("req %p msg %p resp %p freed\n", req, req->msg, req->resp);
+		dsos_debug("req %p msg %p resp %p flags %d freed\n", req, req->msg, req->resp, req->flags);
 		if (req->msg)
 			free(req->msg);
 		if (req->resp && (req->flags & REQ_RESPONSE_COPIED))
@@ -188,7 +188,6 @@ dsos_req_all_t *dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt)
 	if (!req_all || !reqs)
 		dsos_fatal("out of memory");
 	req_all->num_servers   = g.num_servers;
-	req_all->msg_len_max   = zap_max_msg(g.zap);
 	req_all->refcount      = 1;
 	req_all->ctxt          = ctxt;
 	req_all->cb            = cb;
@@ -216,7 +215,6 @@ dsos_req_all_t *dsos_req_all_async_new(dsos_req_cb_t cb, void *ctxt)
 	if (!req_all || !reqs)
 		dsos_fatal("out of memory");
 	req_all->num_servers   = g.num_servers;
-	req_all->msg_len_max   = zap_max_msg(g.zap);
 	req_all->refcount      = 1;
 	req_all->ctxt          = ctxt;
 	req_all->cb            = NULL;
@@ -243,7 +241,6 @@ dsos_req_all_t *dsos_req_all_sparse_new(dsos_req_all_cb_t cb, void *ctxt)
 	reqs    = calloc(g.num_servers, sizeof(dsos_req_t *));
 	if (!req_all || !reqs)
 		dsos_fatal("out of memory");
-	req_all->msg_len_max   = zap_max_msg(g.zap);
 	req_all->refcount      = 1;
 	req_all->ctxt          = ctxt;
 	req_all->cb            = cb;
@@ -320,8 +317,8 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 	dsos_req_all_t	*req_all = (dsos_req_all_t *)ctxt;
 
 	/*
-	 * The req->resp response buffer is invalid after this function
-	 * returns, so copy it.
+	 * The req->resp response buffer from zap is invalid after
+	 * this function returns, so copy it.
 	 */
 	if (req->resp && len) {
 		resp = (dsosd_msg_t *)malloc(len);
@@ -329,18 +326,17 @@ static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 			dsos_fatal("out of memory\n");
 		memcpy(resp, req->resp, len);
 		req->flags |= REQ_RESPONSE_COPIED;
+		req->resp = resp;
 	} else
-		resp = NULL;
-
-	req->resp = resp;
+		req->resp = NULL;
 
 #ifdef DSOS_DEBUG
-	if (resp) {
+	if (req->resp) {
 		dsos_debug("req %p req_all %p pend %d len %d ctxt %p msg %p id %ld "
 			   "type %d status %d copied to %p\n",
 			   req, req_all, req_all->num_reqs_pend,
-			   len, ctxt, req->msg, resp->u.hdr.id,
-			   resp->u.hdr.type, resp->u.hdr.status, resp);
+			   len, ctxt, req->msg, req->resp->u.hdr.id,
+			   req->resp->u.hdr.type, req->resp->u.hdr.status, req->resp);
 	} else {
 		dsos_debug("req %p req_all %p len %d ctxt %p flushed\n",
 			   req, req_all, len, ctxt);

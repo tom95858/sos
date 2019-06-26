@@ -155,18 +155,40 @@ static void handle_connect_req(zap_ep_t ep)
 {
 	dsosd_client_t	*client;
 
-	zap_accept(ep, server_cb, NULL, 0);
+	dsosd_debug("ep %p\n", ep);
 	client = dsosd_client_new(ep);
-	if (!client) {
-		dsosd_error("closing ep %p for no resources\n", ep);
-		zap_close(ep);
-		return;
-	}
+	if (!client)
+		goto err;
 	zap_set_ucontext(ep, client);
+	zap_accept(ep, server_cb, NULL, 0);
+#if 1
+	/*
+	 * XXX Until SOS can provide for RMA directly to or from a
+	 * container-backed object.
+	 */
+	zap_err_t zerr = zap_map(ep, &client->lmap, client->heap_buf, client->heap_sz, ZAP_ACCESS_NONE);
+	if (zerr) {
+		dsosd_error("zap_map err %d %s\n", zerr, zap_err_str(zerr));
+		goto err;
+	}
+	client->heap = mm_new(client->heap_buf, client->heap_sz, 64);
+	if (!client->heap) {
+		dsosd_error("could not create shared heap\n");
+		goto err;
+	}
+#endif
+	return;
+err:
+	dsosd_error("closing ep %p for no resources\n", ep);
+	zap_close(ep);
 }
 
 static void handle_connected(zap_ep_t ep)
 {
+	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+	sem_post(&client->initialized_sem);
+
 	++g.stats.tot_num_connects;
 	++g.num_clients;
 
@@ -179,7 +201,8 @@ static void handle_connected(zap_ep_t ep)
 	slen = sizeof(lsin);
 	zap_get_name(ep, (void *)&lsin, (void *)&rsin, &slen);
 	inet_ntop(rsin.sin_family, &rsin.sin_addr, mybuf, sizeof(mybuf));
-	dsosd_debug("connect %s:%d\n", mybuf, ntohs(rsin.sin_port));
+	dsosd_debug("connect %s:%d ep %p client %p\n",
+		    mybuf, ntohs(rsin.sin_port), ep, client);
 #endif
 }
 
@@ -196,7 +219,8 @@ static void handle_disconnected(zap_ep_t ep)
 	slen = sizeof(lsin);
 	zap_get_name(ep, (void *)&lsin, (void *)&rsin, &slen);
 	inet_ntop(rsin.sin_family, &rsin.sin_addr, mybuf, sizeof(mybuf));
-	dsosd_debug("disconnect %s:%d\n", mybuf, ntohs(rsin.sin_port));
+	dsosd_debug("disconnect %s:%d ep %p client %p\n",
+		    mybuf, ntohs(rsin.sin_port), ep, client);
 #endif
 	dsosd_client_put(client);
 	zap_free(ep);
@@ -236,7 +260,8 @@ static void handle_read_complete(zap_ep_t ep, void *ctxt)
 #if 1
 	/* Remove this once SOS can map objects directly. */
 	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
-	memcpy(obj_data, req->rma_buf, req->resp->u.obj_create_resp.len);
+	assert(obj_max_sz == req->resp->u.hdr2.obj_sz);
+	memcpy(obj_data, req->rma_buf, req->resp->u.hdr2.obj_sz);
 	mm_free(client->heap, req->rma_buf);
 #endif
 	req->rma_buf = NULL;
@@ -355,6 +380,16 @@ static const char *msg_type_to_str(int type)
 
 static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 {
+	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+	assert(client->debug != 0xbadb0bad);
+
+	if (!client->initialized) {
+		dsosd_debug("ep %p client %p waiting for init\n", ep, client);
+		sem_wait(&client->initialized_sem);
+		client->initialized = 1;
+	}
+
 	++g.stats.tot_num_reqs;
 
 	dsosd_debug("ep %p %s msg %p type %d id %ld len %d\n",
@@ -457,6 +492,7 @@ dsosd_client_t *dsosd_client_new(zap_ep_t ep)
 	client->next_handle = 0x1b0b0b0b0ul;
 
 	pthread_mutex_init(&client->idx_rbt_lock, 0);
+	sem_init(&client->initialized_sem, 0, 0);
 	rbt_init(&client->idx_rbt, idx_rbn_cmp_fn);
 	rbt_init(&client->handle_rbt, handle_rbn_cmp_fn);
 #if 1
@@ -470,24 +506,12 @@ dsosd_client_t *dsosd_client_new(zap_ep_t ep)
 	 */
 	client->heap_sz  = 4 * 1024 * 1024;
 	client->heap_buf = malloc(client->heap_sz);
-	if (!client->heap_buf)
-		goto err;
-	zap_err_t zerr = zap_map(ep, &client->lmap, client->heap_buf, client->heap_sz, ZAP_ACCESS_NONE);
-	if (zerr) {
-		dsosd_error("zap_map err %d %s\n", zerr, zap_err_str(zerr));
-		goto err;
-	}
-	client->heap = mm_new(client->heap_buf, client->heap_sz, 64);
-	if (!client->heap) {
-		dsosd_error("could not create shared heap\n");
-		goto err;
+	if (!client->heap_buf) {
+		dsosd_client_put(client);
+		return NULL;
 	}
 #endif
-	dsosd_debug("%p\n", client);
 	return client;
- err:
-	dsosd_client_put(client);
-	return NULL;
 }
 
 void dsosd_client_get(dsosd_client_t *client)
@@ -513,6 +537,9 @@ void dsosd_client_put(dsosd_client_t *client)
 			rbt_del(&client->handle_rbt, (struct rbn *)rbn);
 			free(rbn);
 		}
+#if 1
+		client->debug = 0xbadb0bad;
+#endif
 		free(client);
 	}
 }

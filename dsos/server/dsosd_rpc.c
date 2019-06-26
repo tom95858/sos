@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include "dsosd_priv.h"
 
 static void	*rpc_serialize_schema(sos_schema_t schema, void *buf, size_t *psz);
@@ -17,7 +18,7 @@ static dsosd_handle_t dsosd_ptr_to_handle(dsosd_client_t *client, void *ptr)
 	rbn_init((struct rbn *)rbn, (void *)handle);
 	rbn->ptr = ptr;
 	rbt_ins(&client->handle_rbt, (void *)rbn);
-	dsosd_debug("client %p ptr %p assigned handle %ld\n", client, ptr, handle);
+	dsosd_debug("client %p ptr %p assigned handle 0x%lx\n", client, ptr, handle);
 
 	return handle;
 }
@@ -28,10 +29,10 @@ static void *dsosd_handle_to_ptr(dsosd_client_t *client, dsosd_handle_t handle)
 
 	rbn = (struct ptr_rbn *)rbt_find(&client->handle_rbt, (void *)handle);
 	if (!rbn) {
-		dsosd_error("client %p handle %ld not found\n", client, handle);
+		dsosd_error("client %p handle 0x%lx not found\n", client, handle);
 		return NULL;
 	}
-	dsosd_debug("client %p handle %ld is ptr %p\n", client, handle, rbn->ptr);
+	dsosd_debug("client %p handle 0x%lx is ptr %p\n", client, handle, rbn->ptr);
 	return rbn->ptr;
 }
 
@@ -43,7 +44,8 @@ static void dsosd_handle_free(dsosd_client_t *client, dsosd_handle_t handle)
 	if (rbn) {
 		rbt_del(&client->handle_rbt, (struct rbn *)rbn);
 		free(rbn);
-	}
+	} else
+		dsosd_error("client %p handle 0x%lx not found\n", client, handle);
 }
 
 void rpc_handle_ping(zap_ep_t ep, dsosd_msg_ping_req_t *msg, size_t len)
@@ -66,46 +68,56 @@ void rpc_handle_ping(zap_ep_t ep, dsosd_msg_ping_req_t *msg, size_t len)
 
 void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len)
 {
-	int			ret;
-	char			*obj_data;
-	size_t			obj_max_sz;
-	zap_err_t		zerr;
-	dsosd_req_t		*req;
-	sos_schema_t		schema;
-	sos_obj_t		obj;
-	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
+	int				ret;
+	char				*obj_data;
+	size_t				obj_max_sz;
+	zap_err_t			zerr;
+	dsosd_req_t			*req;
+	dsosd_msg_obj_create_resp_t	*resp;
+	sos_schema_t			schema;
+	sos_obj_t			obj;
+	dsosd_client_t			*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 	dsosd_debug("ep %p msg %p len %d obj: va %p len %d handle %p\n",
 		    ep, msg, len, msg->hdr2.obj_va, msg->hdr2.obj_sz, msg->schema_handle);
 
-	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
-
 	req = dsosd_req_new(client, DSOSD_MSG_OBJ_CREATE_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_obj_create_resp_t));
-	req->resp->u.hdr2.obj_sz = msg->hdr2.obj_sz;
+
+	resp = (dsosd_msg_obj_create_resp_t *)req->resp;
+	resp->hdr2.obj_sz = msg->hdr2.obj_sz;
+
+	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
+	if (!schema) {
+		resp->hdr.status = EBADF;
+		resp->hdr.flags  = 0;
+		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
+		return;
+	}
 
 	obj = sos_obj_new(schema);
 	if (!obj) {
-		req->resp->u.hdr.status = ENOMEM;
-		req->resp->u.hdr.flags  = 0;
+		resp->hdr.status = ENOMEM;
+		resp->hdr.flags  = 0;
 		dsosd_error("error %d creating obj\n", errno);
 		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 		return;
 	}
 	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
+	assert(resp->hdr2.obj_sz == obj_max_sz);
 
 	/*
 	 * The DSOS object id is formed from the server # and the
 	 * local ODS reference.  The two unique identify an object
 	 * within a distributed container.
 	 */
-	req->resp->u.obj_create_resp.obj_id.serv = g.opts.server_num;
-	req->resp->u.obj_create_resp.obj_id.ods  = sos_obj_ref(obj).ref.obj;
+	resp->obj_id.serv = g.opts.server_num;
+	resp->obj_id.ods  = sos_obj_ref(obj).ref.obj;
 
-	dsosd_debug("new obj %p obj_data %p obj_max_sz %d id %08lx%08lx\n",
+	dsosd_debug("new obj %p obj_data %p obj_sz %d id %08lx%08lx\n",
 		    obj, obj_data, obj_max_sz,
-		    req->resp->u.obj_create_resp.obj_id.serv,
-		    req->resp->u.obj_create_resp.obj_id.ods);
+		    resp->obj_id.serv,
+		    resp->obj_id.ods);
 
 	if (msg->hdr.flags & DSOSD_MSG_IMM) {
 		/* The object data is in the recv buffer. Copy it to the object. */
@@ -115,8 +127,8 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 		if (ret)
 			dsosd_error("ep %p sos_obj_index ret %d\n", ep, ret);
 		sos_obj_put(obj);
-		req->resp->u.hdr.status = ret;
-		req->resp->u.hdr.flags  = DSOSD_MSG_IMM;
+		resp->hdr.status = ret;
+		resp->hdr.flags  = DSOSD_MSG_IMM;
 		dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
 	} else {
 		/* RMA-read the object from client memory. */
@@ -139,9 +151,10 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 #endif
 		if (zerr) {
 			dsosd_error("zap_read ep %p zerr %d %s\n", ep, zerr, zap_err_str(zerr));
-			req->resp->u.hdr.status = zerr;
-			req->resp->u.hdr.flags  = 0;
+			resp->hdr.status = zerr;
+			resp->hdr.flags  = 0;
 			dsosd_req_complete(req, sizeof(dsosd_msg_obj_create_resp_t));
+			sos_obj_put(obj);
 		}
 	}
 }
@@ -192,8 +205,8 @@ void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg,
 	else
 		req->resp->u.hdr.status = ENOENT;
 
-	dsosd_debug("ep %d msg %p len %d: '%s' perms 0%o, cont %p\n", ep, msg, len,
-		    path, msg->perms, cont);
+	dsosd_debug("ep %d msg %p len %d: '%s' perms 0%o, cont %p/%p\n", ep, msg, len,
+		    path, msg->perms, cont, req->resp->u.container_open_resp.handle);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_container_open_resp_t));
 	free(path);
@@ -234,8 +247,13 @@ void rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *ms
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 	cont = (sos_t)dsosd_handle_to_ptr(client, msg->handle);
+	if (!cont) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_CONTAINER_CLOSE_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_container_close_resp_t), EBADF);
+		return;
+	}
 
-	dsosd_debug("ep %d msg %p len %d: cont %p\n", ep, msg, len, msg->handle);
+	dsosd_debug("ep %d msg %p len %d: handle %p cont %p\n", ep, msg, len, msg->handle, cont);
 
 	/* Close all indices the client has open in the container being closed. */
 	while ((rbn = (struct ptr_rbn *)rbt_min(&client->idx_rbt))) {
@@ -264,11 +282,16 @@ void rpc_handle_schema_by_name(zap_ep_t ep, dsosd_msg_schema_by_name_req_t *msg,
 	sos_schema_t		schema;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
-
 	req = dsosd_req_new(client, DSOSD_MSG_SCHEMA_BY_NAME_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_schema_by_name_resp_t));
 
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
+	if (!cont) {
+		req->resp->u.hdr.status = EBADF;
+		req->resp->u.hdr.flags  = 0;
+		dsosd_req_complete(req, sizeof(dsosd_msg_schema_by_name_resp_t));
+		return;
+	}
 	schema = sos_schema_by_name(cont, msg->name);
 	if (schema) {
 		req->resp->u.schema_by_name_resp.handle = dsosd_ptr_to_handle(client, schema);
@@ -282,8 +305,8 @@ void rpc_handle_schema_by_name(zap_ep_t ep, dsosd_msg_schema_by_name_req_t *msg,
 		req->resp->u.hdr.status = ENOENT;
 	}
 
-	dsosd_debug("ep %d msg %p len %d: cont_handle %p schema %p\n", ep, msg, len,
-		    msg->cont_handle, schema);
+	dsosd_debug("ep %d msg %p len %d: cont %p/%p schema %p\n", ep, msg, len,
+		    msg->cont_handle, cont, schema);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_schema_by_name_resp_t));
 }
@@ -297,11 +320,16 @@ void rpc_handle_schema_add(zap_ep_t ep, dsosd_msg_schema_add_req_t *msg, size_t 
 
 	cont   = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
 	schema = (sos_schema_t)dsosd_handle_to_ptr(client, msg->schema_handle);
+	if (!cont || !schema) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_SCHEMA_ADD_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_schema_add_resp_t), EBADF);
+		return;
+	}
 
 	ret = sos_schema_add(cont, schema);
 
-	dsosd_debug("ep %d msg %p len %d: cont_handle %p schema_handle %p\n", ep, msg, len,
-		    msg->cont_handle, msg->schema_handle);
+	dsosd_debug("ep %d msg %p len %d: cont %p/%p schema %p/%p\n", ep, msg, len,
+		    msg->cont_handle, cont, msg->schema_handle, schema);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_SCHEMA_ADD_RESP, msg->hdr.id,
 				       sizeof(dsosd_msg_schema_add_resp_t), ret);
@@ -314,6 +342,11 @@ void rpc_handle_part_create(zap_ep_t ep, dsosd_msg_part_create_req_t *msg, size_
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
+	if (!cont) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_PART_CREATE_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_part_create_resp_t), EBADF);
+		return;
+	}
 
 	if (!msg->path[0])
 		ret = sos_part_create(cont, msg->name, NULL);
@@ -335,10 +368,16 @@ void rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t le
 	sos_part_t		part;
 	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
-	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
-
 	req = dsosd_req_new(client, DSOSD_MSG_PART_FIND_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_part_find_resp_t));
+
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
+	if (!cont) {
+		req->resp->u.hdr.status = EBADF;
+		req->resp->u.hdr.flags  = 0;
+		dsosd_req_complete(req, sizeof(dsosd_msg_part_find_resp_t));
+		return;
+	}
 
 	part = sos_part_find(cont, msg->name);
 	if (part)
@@ -346,8 +385,8 @@ void rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t le
 	else
 		req->resp->u.hdr.status = ENOENT;
 
-	dsosd_debug("ep %d msg %p len %d: cont_handle %p name %s\n",
-		    ep, msg, len, msg->cont_handle, msg->name);
+	dsosd_debug("ep %d msg %p len %d: cont %p/%p name %s\n",
+		    ep, msg, len, msg->cont_handle, cont, msg->name);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_part_find_resp_t));
 }
@@ -362,8 +401,16 @@ void rpc_handle_part_set_state(zap_ep_t ep, dsosd_msg_part_set_state_req_t *msg,
 
 	ret = sos_part_state_set(part, msg->new_state);
 
-	dsosd_debug("ep %d msg %p len %d: handle %p new_state %d\n",
-		    ep, msg, len, msg->handle, msg->new_state);
+	/*
+	 * The part object is unavailable after this. This is for ease of use
+	 * in the common case where we create a partition, set its state,
+	 * then begin using the container.
+	 */
+	sos_part_put(part);
+	dsosd_handle_free(client, msg->handle);
+
+	dsosd_debug("ep %d msg %p len %d: part %p/%p new_state %d\n",
+		    ep, msg, len, msg->handle, part, msg->new_state);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_PART_SET_STATE_RESP, msg->hdr.id,
 				       sizeof(dsosd_msg_part_set_state_resp_t), ret);
@@ -659,6 +706,11 @@ void rpc_handle_obj_index(zap_ep_t ep, dsosd_msg_obj_index_req_t *msg, size_t le
 
 	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
 	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
+	if (!cont || !schema) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_INDEX_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_obj_index_resp_t), EBADF);
+		return;
+	}
 
 	buf     = msg->data;
 	buf_len = msg->data_len;
@@ -694,18 +746,24 @@ void rpc_handle_obj_find(zap_ep_t ep, dsosd_msg_obj_find_req_t *msg, size_t len)
 	dsosd_req_t	*req;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
+	req = dsosd_req_new(client, DSOSD_MSG_OBJ_FIND_RESP, msg->hdr.id,
+			    sizeof(dsosd_msg_obj_find_resp_t));
+
 	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
 	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
-	attr   = sos_schema_attr_by_id(schema, msg->attr_id);
+	if (!cont || !schema) {
+		req->resp->u.hdr.status = EBADF;
+		req->resp->u.hdr.flags  = 0;
+		dsosd_req_complete(req, sizeof(dsosd_msg_obj_find_resp_t));
+		return;
+	}
+	attr = sos_schema_attr_by_id(schema, msg->attr_id);
 
 	buf     = msg->data;
 	buf_len = msg->data_len;
 	key_len = deserialize_buf(&key_data, &buf, &buf_len);
 	key     = sos_key_new(key_len);
 	sos_key_set(key, key_data, key_len);
-
-	req = dsosd_req_new(client, DSOSD_MSG_OBJ_FIND_RESP, msg->hdr.id,
-			    sizeof(dsosd_msg_obj_find_resp_t));
 
 	idx = get_index(client, cont, schema, attr);
 	if (idx)
@@ -733,6 +791,11 @@ void rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len)
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 	cont = dsosd_handle_to_ptr(client, msg->cont_handle);
+	if (!cont) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_GET_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_obj_get_resp_t), EBADF);
+		return;
+	}
 
 	/* Use the ODS from the primary partition in the given container. */
 	primary = __sos_primary_obj_part(cont);
@@ -759,10 +822,16 @@ void rpc_handle_iterator_close(zap_ep_t ep, dsosd_msg_iterator_close_req_t *msg,
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 	iter = (sos_iter_t)dsosd_handle_to_ptr(client, msg->iter_handle);
+	if (!iter) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_ITERATOR_CLOSE_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_iterator_close_resp_t), EBADF);
+		return;
+	}
+
 	sos_iter_free(iter);
 	dsosd_handle_free(client, msg->iter_handle);
 
-	dsosd_debug("ep %d msg %p len %d iter %p\n", ep, msg, len, iter);
+	dsosd_debug("ep %d msg %p len %d iter %p/%p\n", ep, msg, len, msg->iter_handle, iter);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_ITERATOR_CLOSE_RESP, msg->hdr.id,
 				       sizeof(dsosd_msg_iterator_close_resp_t), 0);
@@ -770,7 +839,6 @@ void rpc_handle_iterator_close(zap_ep_t ep, dsosd_msg_iterator_close_req_t *msg,
 
 void rpc_handle_iterator_new(zap_ep_t ep, dsosd_msg_iterator_new_req_t *msg, size_t len)
 {
-	sos_t		cont;
 	sos_schema_t	schema;
 	sos_attr_t	attr;
 	sos_iter_t	iter;
@@ -780,9 +848,14 @@ void rpc_handle_iterator_new(zap_ep_t ep, dsosd_msg_iterator_new_req_t *msg, siz
 	req = dsosd_req_new(client, DSOSD_MSG_ITERATOR_NEW_RESP, msg->hdr.id,
 			    sizeof(dsosd_msg_iterator_new_resp_t));
 
-	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
 	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
-	attr   = sos_schema_attr_by_id(schema, msg->attr_id);
+	if (!schema) {
+		req->resp->u.hdr.status = EBADF;
+		req->resp->u.hdr.flags  = 0;
+		dsosd_req_complete(req, sizeof(dsosd_msg_iterator_new_resp_t));
+		return;
+	}
+	attr = sos_schema_attr_by_id(schema, msg->attr_id);
 
 	iter = sos_attr_iter_new(attr);
 	if (iter)
@@ -790,8 +863,8 @@ void rpc_handle_iterator_new(zap_ep_t ep, dsosd_msg_iterator_new_req_t *msg, siz
 	else
 		req->resp->u.hdr.status = ENOENT;
 
-	dsosd_debug("ep %d msg %p len %d cont %p schema %p attr %p iter %pd\n",
-		    ep, msg, len, cont, schema, attr, iter);
+	dsosd_debug("ep %d msg %p len %d schema %p/%p attr %p iter %pd\n",
+		    ep, msg, len, msg->schema_handle, schema, attr, iter);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_iterator_new_resp_t));
 }
@@ -816,6 +889,11 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 	}
 
 	iter = dsosd_handle_to_ptr(client, msg->iter_handle);
+	if (!iter) {
+		dsosd_req_complete_with_status(client, DSOSD_MSG_ITERATOR_STEP_RESP, msg->hdr.id,
+					       sizeof(dsosd_msg_iterator_step_resp_t), EBADF);
+		return;
+	}
 	switch (msg->op) {
 	    case DSOSD_MSG_ITER_OP_BEGIN:
 		ret = sos_iter_begin(iter);
@@ -841,8 +919,8 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 		if (!sos_obj)
 			ret = ENOENT;
 	}
-	dsosd_debug("ep %d op %d iter %p key %p key_len %d ret %d\n", ep, msg->op,
-		    iter, key, key_len, ret);
+	dsosd_debug("ep %d op %d iter %p/%p key %p key_len %d ret %d\n", ep, msg->op,
+		    msg->iter_handle, iter, key, key_len, ret);
 
 	if (sos_obj)
 		dsosd_req_complete_with_obj(ep, sos_obj, DSOSD_MSG_ITERATOR_STEP_RESP, msg);

@@ -227,7 +227,7 @@ typedef struct dsosd_msg_obj_create_req {
 
 typedef struct dsosd_msg_obj_create_resp {
 	dsosd_msg_hdr_t		hdr;
-	uint64_t		len;
+	dsosd_msg_hdr2_t	hdr2;
 	dsosd_objid_t		obj_id;
 } dsosd_msg_obj_create_resp_t;
 
@@ -277,7 +277,6 @@ typedef struct dsosd_msg_obj_get_resp {
 
 typedef struct dsosd_msg_iterator_new_req {
 	dsosd_msg_hdr_t		hdr;
-	dsosd_handle_t		cont_handle;
 	dsosd_handle_t		schema_handle;
 	uint32_t		attr_id;
 } dsosd_msg_iterator_new_req_t;

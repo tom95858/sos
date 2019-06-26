@@ -85,6 +85,9 @@ typedef struct dsosd_client_s {
 	pthread_mutex_t		idx_rbt_lock;
 	struct rbt		handle_rbt;    // maps handles to pointers
 	uint64_t		next_handle;   // next handle # to give out
+	int			initialized;   // set when endpoint is ready
+	sem_t			initialized_sem;
+	int			debug;
 #if 1
 	// XXX temporary, until SOS can alloc from reg mem
 	mm_region_t		heap;          // mapped heap for object RMA
@@ -127,6 +130,7 @@ void		rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_templat
 			__ods_log_fp = stderr;					\
 		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
+		sleep(1000000);							\
 		exit(1);							\
 	} while (0);
 

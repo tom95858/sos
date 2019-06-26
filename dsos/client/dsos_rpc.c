@@ -213,6 +213,8 @@ int dsos_rpc_container_open(rpc_container_open_in_t  *args_inp,
 		resp = (dsosd_msg_container_open_resp_t *)req_all->reqs[i]->resp;
 		args_outp->handles[i] = resp->handle;
 		dsos_err_set(i, resp->hdr.status);
+		dsos_debug("server %d req %p resp %p handle %p status %d\n",
+			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
 	}
 
 	dsos_req_all_put(req_all);
@@ -320,6 +322,8 @@ int dsos_rpc_schema_by_name(rpc_schema_by_name_in_t  *args_inp,
 		resp = (dsosd_msg_schema_by_name_resp_t *)req_all->reqs[i]->resp;
 		args_outp->handles[i] = resp->handle;
 		dsos_err_set(i, resp->hdr.status);
+		dsos_debug("server %d req %p resp %p handle %p status %d\n",
+			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
 	}
 	memcpy(args_outp->templ, resp->templ, sizeof(args_outp->templ));
 
@@ -359,6 +363,8 @@ int dsos_rpc_schema_from_template(rpc_schema_from_template_in_t  *args_inp,
 		resp = (dsosd_msg_schema_from_template_resp_t *)req_all->reqs[i]->resp;
 		args_outp->handles[i] = resp->handle;
 		dsos_err_set(i, resp->hdr.status);
+		dsos_debug("server %d req %p resp %p handle %p status %d\n",
+			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
 	}
 
 	dsos_req_all_put(req_all);
@@ -469,6 +475,8 @@ int dsos_rpc_part_find(rpc_part_find_in_t  *args_inp,
 		resp = (dsosd_msg_part_find_resp_t *)req_all->reqs[i]->resp;
 		args_outp->handles[i] = resp->handle;
 		dsos_err_set(i, resp->hdr.status);
+		dsos_debug("server %d req %p resp %p handle %p status %d\n",
+			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
 	}
 
 	dsos_req_all_put(req_all);
@@ -550,8 +558,8 @@ int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 		req_len += obj_sz;
 	}
 
-	dsos_debug("obj %p obj_data %p obj_sz %d%s owned by server %d\n",
-		   obj, obj_data, obj_sz,
+	dsos_debug("obj %p schema %p obj_data %p obj_sz %d%s owned by server %d\n",
+		   obj, msg->schema_handle, obj_data, obj_sz,
 		   obj->flags & DSOS_OBJ_INLINE ? " inline" : "",
 		   server_id);
 
@@ -968,6 +976,8 @@ int dsos_rpc_iter_new(rpc_iter_new_in_t *args_inp, rpc_iter_new_out_t *args_outp
 		resp = (dsosd_msg_iterator_new_resp_t *)req_all->reqs[i]->resp;
 		args_outp->handles[i] = resp->iter_handle;
 		dsos_err_set(i, resp->hdr.status);
+		dsos_debug("server %d req %p resp %p handle %p status %d\n",
+			   i, req_all->reqs[i], resp, resp->iter_handle, resp->hdr.status);
 	}
 
 	dsos_req_all_put(req_all);

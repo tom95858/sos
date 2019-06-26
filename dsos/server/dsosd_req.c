@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include "dsosd_priv.h"
 
 size_t dsosd_msg_len(int type)
@@ -146,6 +147,8 @@ dsosd_req_t *dsosd_req_complete_with_obj(zap_ep_t ep, sos_obj_t sos_obj,
 			req->resp->u.hdr.flags  = 0;
 			dsosd_req_complete(req, resp_len);
 		}
+		// This currently is true of the dsos client but may change in the future.
+		assert (client_buf_sz == obj_sz);
 #if 1
 		/*
 		 * We RMA from req->rma_buf for the moment. Once SOS

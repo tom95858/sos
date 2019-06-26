@@ -21,6 +21,7 @@ int		lookup = 0;
 int		progress = 0;
 int		sequential = 0;
 int		local = 0;
+int		verbose = 0;
 int		server_num;
 char		*cont_nm = "/tmp/cont.sos";
 struct timespec	ts;
@@ -57,7 +58,7 @@ void usage(char *av[])
 int main(int ac, char *av[])
 {
 	int		c, i, ret;
-	int		find = 0, iter = 0, create = 0, ping = 0;
+	int		delete_cont = 0, find = 0, iter = 0, loop = 0, create = 0, ping = 0;
 	char		*config = NULL;
 
 	struct option	lopts[] = {
@@ -65,14 +66,17 @@ int main(int ac, char *av[])
 		{ "config",	required_argument, NULL, 'c' },
 		{ "cont",	required_argument, NULL, 'C' },
 		{ "create",     no_argument,       NULL, 'o' },
+		{ "delete",     no_argument,       NULL, 'D' },
 		{ "iter",       no_argument,       NULL, 'l' },
 		{ "local",      no_argument,       NULL, 'u' },
+		{ "loop",       no_argument,       NULL, 'L' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "ping",       required_argument, NULL, 'p' },
 		{ "progress",   no_argument,       NULL, 'g' },
 		{ "sequential", no_argument,       NULL, 'q' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ "start",	required_argument, NULL, 'S' },
+		{ "verbose",	required_argument, NULL, 'v' },
 		{ 0,		0,		   0,     0  }
 	};
 
@@ -84,6 +88,12 @@ int main(int ac, char *av[])
 			break;
 		    case 'C':
 			cont_nm = strdup(optarg);
+			break;
+		    case 'D':
+			delete_cont = 1;
+			break;
+		    case 'L':
+			loop = 1;
 			break;
 		    case 'o':
 			create = 1;
@@ -115,6 +125,9 @@ int main(int ac, char *av[])
 			break;
 		    case 'S':
 			start_num = atoi(optarg);
+			break;
+		    case 'v':
+			verbose = 1;
 			break;
 		    default:
 			usage(av);
@@ -157,6 +170,38 @@ int main(int ac, char *av[])
 		return 0;
 	}
 
+	if (create && loop) {
+		int i = 1;
+		while (1) {
+			printf("================== iteration %d ===================\n", i++);
+			fflush(stdout);
+			ret = dsos_container_delete(cont_nm);
+			if (ret) {
+				fprintf(stderr, "could not delete container %s\n", cont_nm);
+				exit(1);
+			}
+			if (verbose)
+				printf("container %s deleted\n", cont_nm);
+			do_init();
+			do_obj_creates();
+			ret = dsos_container_close(cont);
+			if (ret) {
+				fprintf(stderr, "could not close container %s\n", cont_nm);
+				exit(1);
+			}
+			if (verbose)
+				printf("container %s closed\n", cont_nm);
+		}
+		/*NOTREACHED*/
+	}
+
+	if (delete_cont) {
+		ret = dsos_container_delete(cont_nm);
+		if (ret) {
+			fprintf(stderr, "could not delete container %s\n", cont_nm);
+			exit(1);
+		}
+	}
 	do_init();
 
 	if (create)
@@ -209,6 +254,8 @@ void do_init()
 			fprintf(stderr, "could not create container\n");
 			exit(1);
 		}
+		if (verbose)
+			printf("container %s created\n", cont_nm);
 	}
 	schema = dsos_schema_by_name(cont, "test");
 	if (!schema) {
@@ -271,7 +318,7 @@ struct sos_schema_template schema_template = {
 		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 1 },
 		{ .name = "int1", .type = SOS_TYPE_UINT64,     .indexed = 1 },
 		{ .name = "int2", .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 9000 },
+		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 1000 },
 		{ .name = NULL }
 	}
 };

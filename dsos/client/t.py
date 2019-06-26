@@ -33,8 +33,10 @@ class Test:
         self.doFind()
 
     def doCont(self):
+        print [dsos_cmd, "cont", "--delete", self.contnm]
         check_call([dsos_cmd, "cont", "--delete", self.contnm],
                    stderr=STDOUT)
+        print [dsos_cmd, "cont", "--create", self.contnm, "755", "ROOT"]
         check_call([dsos_cmd, "cont", "--create", self.contnm, "755", "ROOT"],
                    stderr=STDOUT)
 
@@ -126,7 +128,12 @@ if __name__ == "__main__":
             t.numRecs(100)
             t.cont("/tmp/cont-py-%%.sos")
             t.doCont()
-            t.doTest()
+            t.doSchema()
+            t.doCsv()
+            t.doImport()
+            while True:
+                t.doIter()
+#            t.doTest()
             del t
 
     except CalledProcessError as e:
