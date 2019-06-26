@@ -1315,7 +1315,6 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 				&schema->sos->lock);
 	if (!ods_obj)
 		goto err_0;
-	memset(ods_obj->as.ptr, 0, schema->data->obj_sz + schema->data->array_data_sz);
 	obj_ref.ref.ods = SOS_PART(part->part_obj)->part_id;
 	obj_ref.ref.obj = ods_obj_ref(ods_obj);
 	sos_obj = __sos_init_obj(schema->sos, schema, ods_obj, obj_ref);
@@ -1570,18 +1569,7 @@ sos_schema_t sos_obj_schema(sos_obj_t obj)
  */
 void sos_obj_delete(sos_obj_t obj)
 {
-	sos_attr_t attr;
-	TAILQ_FOREACH(attr, &obj->schema->attr_list, entry) {
-		struct sos_value_s v_;
-		sos_value_t value;
-		if (!sos_attr_is_array(attr))
-			continue;
-		value = sos_value_init(&v_, obj, attr);
-		if (!value)
-			continue;
-		ods_obj_delete(value->obj->obj);
-		sos_value_put(value);
-	}
+	memset(obj->obj->as.ptr, 0, obj->schema->data->obj_sz + obj->schema->data->array_data_sz);
 	ods_obj_delete(obj->obj);
 }
 
