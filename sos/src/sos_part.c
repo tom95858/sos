@@ -1120,7 +1120,6 @@ void sos_part_put(sos_part_t part)
 	if (0 == ods_atomic_dec(&part->ref_count)) {
 		__sos_part_obj_put(part->sos, part->part_obj);
 		ods_obj_put(part->part_obj);
-		ods_close(part->obj_ods, ODS_COMMIT_ASYNC);
 		free(part);
 	}
 }

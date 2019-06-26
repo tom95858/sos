@@ -768,6 +768,8 @@ static void free_sos(sos_t sos, sos_commit_t flags)
 	while (!TAILQ_EMPTY(&sos->part_list)) {
 		part = TAILQ_FIRST(&sos->part_list);
 		TAILQ_REMOVE(&sos->part_list, part, entry);
+		ods_close(part->obj_ods, ODS_COMMIT_ASYNC);
+		part->obj_ods = NULL;
 		sos_part_put(part); /* the list reference */
 	}
 	if (sos->part_udata)
