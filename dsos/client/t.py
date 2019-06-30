@@ -128,12 +128,7 @@ if __name__ == "__main__":
             t.numRecs(100)
             t.cont("/tmp/cont-py-%%.sos")
             t.doCont()
-            t.doSchema()
-            t.doCsv()
-            t.doImport()
-            while True:
-                t.doIter()
-#            t.doTest()
+            t.doTest()
             del t
 
     except CalledProcessError as e:

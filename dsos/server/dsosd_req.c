@@ -38,14 +38,6 @@ size_t dsosd_msg_len(int type)
 		return sizeof(dsosd_msg_obj_create_req_t);
 	    case DSOSD_MSG_OBJ_CREATE_RESP:
 		return sizeof(dsosd_msg_obj_create_resp_t);
-	    case DSOSD_MSG_OBJ_INDEX_REQ:
-		return sizeof(dsosd_msg_obj_index_req_t);
-	    case DSOSD_MSG_OBJ_INDEX_RESP:
-		return sizeof(dsosd_msg_obj_index_resp_t);
-	    case DSOSD_MSG_OBJ_FIND_REQ:
-		return sizeof(dsosd_msg_obj_find_req_t);
-	    case DSOSD_MSG_OBJ_FIND_RESP:
-		return sizeof(dsosd_msg_obj_find_resp_t);
 	    case DSOSD_MSG_OBJ_GET_REQ:
 		return sizeof(dsosd_msg_obj_get_req_t);
 	    case DSOSD_MSG_OBJ_GET_RESP:
@@ -131,6 +123,7 @@ dsosd_req_t *dsosd_req_complete_with_obj(zap_ep_t ep, sos_obj_t sos_obj,
 			return NULL;
 		req->resp->u.hdr.flags |= DSOSD_MSG_IMM;
 		req->resp->u.hdr2.obj_sz = obj_sz;
+		req->resp->u.hdr2.obj_id = dsosd_objid(sos_obj);
 		memcpy((char *)req->resp + resp_len, obj_data, obj_sz);
 		sos_obj_put(sos_obj);
 		dsosd_debug("inline obj_data %p obj_sz %d resp_len %d\n",
@@ -162,6 +155,7 @@ dsosd_req_t *dsosd_req_complete_with_obj(zap_ep_t ep, sos_obj_t sos_obj,
 		if (!req->rma_buf)
 			return NULL;
 		req->resp->u.hdr2.obj_sz = obj_sz;
+		req->resp->u.hdr2.obj_id = dsosd_objid(sos_obj);
 		req->resp_len = resp_len;
 		req->ctxt = sos_obj;
 		memcpy(req->rma_buf, obj_data, obj_sz);

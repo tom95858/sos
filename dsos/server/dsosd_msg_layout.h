@@ -27,9 +27,9 @@ typedef struct {
 	union {
 		struct {
 			uint64_t	serv;    // owning server
-			uint64_t	ods;     // ref inside the ODS
+			uint64_t	obj;     // ref inside the ODS
 		};
-		sos_obj_ref_t	as_obj_ref;
+		sos_obj_ref_t		as_ref;
 	};
 } dsosd_objid_t;
 
@@ -43,10 +43,8 @@ enum {
 	DSOSD_MSG_PING_RESP,
 	DSOSD_MSG_OBJ_CREATE_REQ,
 	DSOSD_MSG_OBJ_CREATE_RESP,
-	DSOSD_MSG_OBJ_INDEX_REQ,
-	DSOSD_MSG_OBJ_INDEX_RESP,
-	DSOSD_MSG_OBJ_FIND_REQ,
-	DSOSD_MSG_OBJ_FIND_RESP,
+	DSOSD_MSG_OBJ_DELETE_REQ,
+	DSOSD_MSG_OBJ_DELETE_RESP,
 	DSOSD_MSG_OBJ_GET_REQ,
 	DSOSD_MSG_OBJ_GET_RESP,
 	DSOSD_MSG_CONTAINER_NEW_REQ,
@@ -96,9 +94,11 @@ typedef struct dsosd_msg_hdr {
 } dsosd_msg_hdr_t;
 
 // This is in messages that move SOS objects between client and server.
+// Not all fields are always used.
 typedef struct dsosd_msg_hdr2 {
 	uint64_t	obj_sz;
 	uint64_t	obj_va;
+	dsosd_objid_t	obj_id;
 } dsosd_msg_hdr2_t;
 
 typedef struct dsosd_msg_ping_req {
@@ -228,39 +228,17 @@ typedef struct dsosd_msg_obj_create_req {
 typedef struct dsosd_msg_obj_create_resp {
 	dsosd_msg_hdr_t		hdr;
 	dsosd_msg_hdr2_t	hdr2;
-	dsosd_objid_t		obj_id;
 } dsosd_msg_obj_create_resp_t;
 
-typedef struct dsosd_msg_obj_index_req {
-	dsosd_msg_hdr_t		hdr;
-	dsosd_handle_t		cont_handle;
-	dsosd_handle_t		schema_handle;
-	dsosd_objid_t		obj_id;
-	uint16_t		num_attrs;
-	uint16_t		data_len;
-	char			data[];
-} dsosd_msg_obj_index_req_t;
-
-typedef struct dsosd_msg_obj_index_resp {
-	dsosd_msg_hdr_t		hdr;
-} dsosd_msg_obj_index_resp_t;
-
-typedef struct dsosd_msg_obj_find_req {
+typedef struct dsosd_msg_obj_delete_req {
 	dsosd_msg_hdr_t		hdr;
 	dsosd_msg_hdr2_t	hdr2;
 	dsosd_handle_t		cont_handle;
-	dsosd_handle_t		schema_handle;
-	uint32_t		attr_id;
-	uint32_t		data_len;
-	char			data[];
-} dsosd_msg_obj_find_req_t;
+} dsosd_msg_obj_delete_req_t;
 
-typedef struct dsosd_msg_obj_find_resp {
+typedef struct dsosd_msg_obj_delete_resp {
 	dsosd_msg_hdr_t		hdr;
-	dsosd_msg_hdr2_t	hdr2;
-	dsosd_objid_t		obj_id;
-	char			data[];
-} dsosd_msg_obj_find_resp_t;
+} dsosd_msg_obj_delete_resp_t;
 
 typedef struct dsosd_msg_obj_get_req {
 	dsosd_msg_hdr_t		hdr;
@@ -341,12 +319,10 @@ typedef struct dsosd_msg {
 		dsosd_msg_iterator_step_resp_t		iterator_step_resp;
 		dsosd_msg_obj_create_req_t		obj_create_req;
 		dsosd_msg_obj_create_resp_t		obj_create_resp;
-		dsosd_msg_obj_find_req_t		obj_find_req;
-		dsosd_msg_obj_find_resp_t		obj_find_resp;
+		dsosd_msg_obj_delete_req_t		obj_delete_req;
+		dsosd_msg_obj_delete_resp_t		obj_delete_resp;
 		dsosd_msg_obj_get_req_t			obj_get_req;
 		dsosd_msg_obj_get_resp_t		obj_get_resp;
-		dsosd_msg_obj_index_req_t		obj_index_req;
-		dsosd_msg_obj_index_resp_t		obj_index_resp;
 		dsosd_msg_part_create_req_t		part_create_req;
 		dsosd_msg_part_create_resp_t		part_create_resp;
 		dsosd_msg_part_find_req_t		part_find_req;

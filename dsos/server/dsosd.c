@@ -337,18 +337,14 @@ static const char *msg_type_to_str(int type)
 		return "DSOSD_OBJ_CREATE_REQ";
 	    case DSOSD_MSG_OBJ_CREATE_RESP:
 		return "DSOSD_OBJ_CREATE_RESP";
-	    case DSOSD_MSG_OBJ_INDEX_REQ:
-		return "DSOSD_OBJ_INDEX_REQ";
-	    case DSOSD_MSG_OBJ_INDEX_RESP:
-		return "DSOSD_OBJ_INDEX_RESP";
-	    case DSOSD_MSG_OBJ_FIND_REQ:
-		return "DSOSD_OBJ_FIND_REQ";
-	    case DSOSD_MSG_OBJ_FIND_RESP:
-		return "DSOSD_OBJ_FIND_RESP";
 	    case DSOSD_MSG_OBJ_GET_REQ:
 		return "DSOSD_OBJ_GET_REQ";
 	    case DSOSD_MSG_OBJ_GET_RESP:
 		return "DSOSD_OBJ_GET_RESP";
+	    case DSOSD_MSG_OBJ_DELETE_REQ:
+		return "DSOSD_OBJ_DELETE_REQ";
+	    case DSOSD_MSG_OBJ_DELETE_RESP:
+		return "DSOSD_OBJ_DELETE_RESP";
 	    case DSOSD_MSG_PART_CREATE_REQ:
 		return "DSOSD_PART_CREATE_REQ";
 	    case DSOSD_MSG_PART_CREATE_RESP:
@@ -424,11 +420,8 @@ static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 	    case DSOSD_MSG_OBJ_CREATE_REQ:
 		rpc_handle_obj_create(ep, (dsosd_msg_obj_create_req_t *)msg, len);
 		break;
-	    case DSOSD_MSG_OBJ_INDEX_REQ:
-		rpc_handle_obj_index(ep, (dsosd_msg_obj_index_req_t *)msg, len);
-		break;
-	    case DSOSD_MSG_OBJ_FIND_REQ:
-		rpc_handle_obj_find(ep, (dsosd_msg_obj_find_req_t *)msg, len);
+	    case DSOSD_MSG_OBJ_DELETE_REQ:
+		rpc_handle_obj_delete(ep, (dsosd_msg_obj_delete_req_t *)msg, len);
 		break;
 	    case DSOSD_MSG_OBJ_GET_REQ:
 		rpc_handle_obj_get(ep, (dsosd_msg_obj_get_req_t *)msg, len);

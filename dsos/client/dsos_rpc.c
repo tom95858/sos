@@ -50,6 +50,12 @@ static void rpc_all_signal_cb(dsos_req_all_t *req_all, void *ctxt)
 	sem_post(&req_all->sem);
 }
 
+static void rpc_signal_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	dsos_debug("req %p signaling\n", req);
+	sem_post(&req->sem);
+}
+
 static void rpc_ping_cb(dsos_req_t *req, size_t len, void *ctxt)
 {
 	rpc_ping_out_t	*args_outp = ctxt;
@@ -518,26 +524,44 @@ int dsos_rpc_part_set_state(rpc_part_set_state_in_t  *args_inp,
 	return dsos_err_status();
 }
 
+static void obj_create_cb(dsos_req_t *req, size_t len, void *ctxt)
+{
+	sos_obj_t	obj = ctxt;
+	dsos_obj_cb_t	cb = (dsos_obj_cb_t)req->ctxt2;
+
+	dsos_debug("obj %p req %p conn %p len %d cb %p/%p obj_id %08lx%08lx\n",
+		   obj, req, req->conn, len, req->ctxt2, req->ctxt3,
+		   req->resp->u.hdr2.obj_id.as_ref.ref);
+
+	obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
+	cb(obj, req->ctxt3);
+}
+
 // This call is asynchronous.
 int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 {
 	int				server_id;
 	char				*obj_data;
 	size_t				obj_sz, req_len;
-	dsos_obj_t			*obj;
+	sos_obj_t			obj;
 	dsos_req_t			*req;
+	dsos_schema_t			*schema;
 	dsosd_msg_obj_create_req_t	*msg;
 	uint8_t				sha[SHA256_DIGEST_LENGTH];
 
-	obj     = args_inp->obj;
-	req     = obj->req;
-	req_len = sizeof(dsosd_msg_obj_create_req_t);
-
-	sos_obj_data_get(obj->sos_obj, &obj_data, &obj_sz);
+	obj    = args_inp->obj;
+	schema = args_inp->schema;
+	sos_obj_data_get(obj, &obj_data, &obj_sz);
 
 	/* Calculate the owning DSOS server. */
 	SHA256(obj_data, obj_sz, sha);
 	server_id = sha[0] % g.num_servers;
+
+	req = dsos_req_new(obj_create_cb, obj);
+	if (!req)
+		return ENOMEM;
+	req->ctxt2 = args_inp->cb;
+	req->ctxt3 = args_inp->ctxt;
 
 	/*
 	 * Copy in args to the request message. If the object fits into
@@ -546,25 +570,60 @@ int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 	msg = (dsosd_msg_obj_create_req_t *)req->msg;
 	msg->hdr.type      = DSOSD_MSG_OBJ_CREATE_REQ;
 	msg->hdr2.obj_sz   = obj_sz;
-	msg->schema_handle = obj->schema->handles[server_id];
+	msg->schema_handle = schema->handles[server_id];
 
 	if (obj_sz > (req->msg_len_max - sizeof(dsosd_msg_obj_create_req_t))) {
 		msg->hdr2.obj_va = (uint64_t)obj_data;
+		req_len = sizeof(dsosd_msg_obj_create_req_t);
 	} else {
 		msg->hdr2.obj_va = 0;
 		msg->hdr.flags |= DSOSD_MSG_IMM;
-		obj->flags |= DSOS_OBJ_INLINE;
 		memcpy(msg->data, obj_data, obj_sz);
-		req_len += obj_sz;
+		req_len = sizeof(dsosd_msg_obj_create_req_t) + obj_sz;
 	}
 
 	dsos_debug("obj %p schema %p obj_data %p obj_sz %d%s owned by server %d\n",
 		   obj, msg->schema_handle, obj_data, obj_sz,
-		   obj->flags & DSOS_OBJ_INLINE ? " inline" : "",
+		   msg->hdr.flags & DSOSD_MSG_IMM ? " inline" : "",
 		   server_id);
 
-	/* This can block until resources (SQ credits) are available. */
-	return dsos_req_submit(obj->req, &g.conns[server_id], req_len);
+	/* This can block until resources (SQ or RQ credits) are available. */
+	return dsos_req_submit(req, &g.conns[server_id], req_len);
+}
+
+int dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp)
+{
+	int		ret, server_num;
+	dsos_req_t	*req;
+	dsos_schema_t	*schema;
+
+	req = dsos_req_new(rpc_signal_cb, NULL);
+	if (!req)
+		return ENOMEM;
+
+	schema     = (dsos_schema_t *)args_inp->obj->ctxt;
+	server_num = args_inp->obj->obj_ref.ref.ods;
+
+	dsos_debug("obj %p %08lx%08lx\n", args_inp->obj,
+		   args_inp->obj->obj_ref.ref.ods, args_inp->obj->obj_ref.ref.obj);
+
+	req->msg->u.hdr.type = DSOSD_MSG_OBJ_DELETE_REQ;
+	req->msg->u.hdr2.obj_id.as_ref         = args_inp->obj->obj_ref;
+	req->msg->u.obj_delete_req.cont_handle = schema->cont->handles[server_num];
+
+	ret = dsos_req_submit(req, &g.conns[server_num], sizeof(dsosd_msg_obj_delete_req_t));
+	if (ret) {
+		dsos_error("ret %d\n", ret);
+		return ret;
+	}
+
+	sem_wait(&req->sem);
+
+	ret = req->resp->u.hdr.status;
+
+	dsos_req_put(req);
+
+	return ret;
 }
 
 static char *serialize_uint32(const int v, char **pp, size_t *psz)
@@ -735,153 +794,6 @@ void dsos_rpc_free_schema_template(sos_schema_template_t t)
 	free(t);
 }
 
-static void index_obj_cb(dsos_req_all_t *req_all, void *ctxt)
-{
-	dsos_obj_t	*obj  = ctxt;
-
-	dsos_debug("obj %p\n", obj);
-
-	obj->req_all = req_all;
-	if (obj->cb)
-		obj->cb(obj, obj->ctxt);
-}
-
-int dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp)
-{
-	int				i, j;
-	size_t				len;
-	char				*buf, *p;
-	dsos_req_all_t			*req_all;
-	dsosd_msg_obj_index_req_t	*msg;
-	sos_value_t			v;
-	dsos_obj_t			*obj;
-
-	obj = args_inp[0].obj;
-
-	req_all = dsos_req_all_sparse_new(index_obj_cb, obj);
-
-	/*
-	 * Copy in args to the request messages. Not every server
-	 * is always involved. Skip those where the attribute count
-	 * is 0 (there is nothing to send).
-	 */
-	for (i = 0; i < g.num_servers; ++i) {
-		if (args_inp[i].num_attrs == 0)
-			continue;  // no RPC for this server
-		dsos_req_all_add_server(req_all, i);
-		msg = (dsosd_msg_obj_index_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type      = DSOSD_MSG_OBJ_INDEX_REQ;
-		msg->hdr.flags     = 0;
-		msg->hdr.status    = 0;
-		msg->cont_handle   = obj->schema->cont->handles[i];
-		msg->schema_handle = obj->schema->handles[i];
-		msg->obj_id        = obj->obj_id;
-		msg->num_attrs     = args_inp[i].num_attrs;
-
-		// len is what's available in the serialization buffer
-		len = DSOSD_MSG_MAX_DATA - sizeof(dsosd_msg_obj_index_req_t);
-		buf = msg->data;
-		for (j = 0; j < args_inp[i].num_attrs; ++j) {
-			v = args_inp[i].attrs[j];
-			serialize_uint32(sos_attr_id(v->attr), &buf, &len);
-			p = buf;
-			if (!dsos_rpc_serialize_attr_value(v, &buf, &len)) {
-				dsos_error("attr sz %d too big\n", sos_value_size(v));
-				sos_value_put(v);
-				sos_value_free(v);
-				return E2BIG;
-			}
-			sos_value_put(v);
-			sos_value_free(v);
-		}
-		msg->data_len = buf - msg->data;
-		dsos_debug("obj_id %08lx%08lx server %d has %d attrs data_len %d\n", obj->obj_id,
-			   i, args_inp[i].num_attrs, msg->data_len);
-		req_all->reqs[i]->msg_len = sizeof(dsosd_msg_obj_index_req_t) + msg->data_len;
-	}
-
-	return dsos_req_all_submit(req_all, 0);
-}
-
-static void rpc_obj_find_cb(dsos_req_t *req, size_t len, void *ctxt)
-{
-	size_t				obj_sz;
-	char				*obj_data;
-	rpc_obj_find_out_t		*args_outp = ctxt;
-	dsosd_msg_obj_find_resp_t	*resp = (dsosd_msg_obj_find_resp_t *)req->resp;
-
-	sos_obj_data_get(args_outp->sos_obj, &obj_data, &obj_sz);
-
-	if (resp && resp->hdr.flags & DSOSD_MSG_IMM) {
-		memcpy(obj_data, resp->data, resp->hdr2.obj_sz);
-		dsos_debug("req %p len %d copied to obj_data %p\n", req, len, obj_data);
-	} else {
-		dsos_debug("req %p len %d flushed\n", req, len);
-	}
-
-	args_outp->status = resp->hdr.status;
-	args_outp->obj_id = resp->obj_id.as_obj_ref;
-
-	sem_post(&req->sem);
-}
-
-int dsos_rpc_obj_find(rpc_obj_find_in_t *args_inp, rpc_obj_find_out_t *args_outp)
-{
-	int				ret;
-	void				*key_data;
-	size_t				buf_len, key_sz, obj_sz;
-	char				*buf, *obj_data, *p;
-	dsos_req_t			*req;
-	dsosd_msg_obj_find_req_t	*msg;
-
-	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
-
-	req = dsos_req_new(rpc_obj_find_cb, NULL);
-	if (!req)
-		return ENOMEM;
-
-	/* This is so the callback can see the object. */
-	args_outp->sos_obj = args_inp->sos_obj;
-
-	msg = (dsosd_msg_obj_find_req_t *)req->msg;
-	msg->hdr.type      = DSOSD_MSG_OBJ_FIND_REQ;
-	msg->hdr.flags     = 0;
-	msg->hdr.status    = 0;
-	msg->cont_handle   = args_inp->cont_handle;
-	msg->schema_handle = args_inp->schema_handle;
-	msg->attr_id       = sos_attr_id(args_inp->attr);
-	msg->hdr2.obj_va   = (uint64_t)obj_data;
-	msg->hdr2.obj_sz   = obj_sz;
-
-	key_sz   = sos_key_len(args_inp->key);
-	key_data = sos_key_value(args_inp->key);
-
-	// buf_len is what's available in the serialization buffer
-	buf_len = DSOSD_MSG_MAX_DATA - sizeof(dsosd_msg_obj_find_req_t);
-	buf = msg->data;
-	serialize_uint32(key_sz, &buf, &buf_len);
-	serialize_buf(key_data, key_sz, &buf, &buf_len);
-	msg->data_len = buf - msg->data;
-
-	dsos_debug("cont %p schema %p attr_id %d key_sz %d\n",
-		   msg->cont_handle, msg->schema_handle, msg->attr_id, key_sz);
-
-	ret = dsos_req_submit(req, &g.conns[args_inp->server_num],
-			      sizeof(dsosd_msg_obj_find_req_t) + msg->data_len);
-	if (ret) {
-		dsos_error("ret %d\n", ret);
-		return ret;
-	}
-
-	sem_wait(&req->sem);
-
-	dsos_debug("obj_id %08lx%08lx status %d\n",
-		   args_outp->obj_id.ref.ods, args_outp->obj_id.ref.obj,
-		   args_outp->status);
-
-	return 0;
-}
-
 static void rpc_obj_get_cb(dsos_req_t *req, size_t len, void *ctxt)
 {
 	size_t				obj_sz;
@@ -925,7 +837,7 @@ int dsos_rpc_obj_get(rpc_obj_get_in_t *args_inp, rpc_obj_get_out_t *args_outp)
 	msg->hdr.flags         = 0;
 	msg->hdr.status        = 0;
 	msg->cont_handle       = args_inp->cont_handle;
-	msg->obj_id.as_obj_ref = args_inp->obj_id;
+	msg->obj_id.as_ref     = args_inp->obj_id;
 	msg->hdr2.obj_va       = (uint64_t)obj_data;
 	msg->hdr2.obj_sz       = obj_sz;
 
@@ -1037,6 +949,7 @@ static void rpc_iter_step_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 		} else {
 			dsos_debug("obj len %d from server %d\n", obj_sz, server_num);
 		}
+		args_inp->sos_objs[server_num]->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		args_outp->found[server_num] = 0;
@@ -1142,6 +1055,7 @@ static void rpc_step_one_cb(dsos_req_t *req, size_t len, void *ctxt)
 		} else {
 			dsos_debug("obj len %d from server %d\n", obj_sz, server_num);
 		}
+		args_inp->sos_obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		args_outp->found = 0;
@@ -1207,6 +1121,7 @@ static void rpc_step_one_async_cb(dsos_req_t *req, size_t len, void *ctxt)
 		} else {
 			dsos_debug("obj len %d from server %d\n", resp->hdr2.obj_sz, server_num);
 		}
+		iter->sos_objs[server_num]->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		dsos_debug("no obj from server %d\n", server_num);

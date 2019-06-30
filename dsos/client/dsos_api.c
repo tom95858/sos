@@ -350,6 +350,7 @@ static int iter_reset(dsos_iter_t *iter)
 			iter->sos_objs[i] = sos_obj_malloc(iter->schema->sos_schema);
 		if (!iter->sos_objs[i])
 			return ENOMEM;
+		iter->sos_objs[i]->ctxt = iter->schema;
 	}
 	iter->done      = 0;
 	iter->last_srvr = -1;
@@ -393,6 +394,7 @@ static int iter_prefetch(dsos_iter_t *iter)
 	iter->sos_objs[server_num] = sos_obj_malloc(iter->schema->sos_schema);
 	if (!iter->sos_objs[server_num])
 		return ENOMEM;
+	iter->sos_objs[server_num]->ctxt = iter->schema;
 
 	args_in.op          = DSOSD_MSG_ITER_OP_NEXT;
 	args_in.iter_handle = iter->handles[server_num];

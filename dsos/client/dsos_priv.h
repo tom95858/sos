@@ -6,6 +6,7 @@
 #include <openssl/sha.h>
 #include <semaphore.h>
 #include <errno.h>
+#include <assert.h>
 #include <zap.h>
 #include <dsos/dsos.h>
 #include "sos_priv.h"
@@ -19,6 +20,7 @@ typedef struct dsos_req_all_s	dsos_req_all_t;
 typedef struct dsos_obj_s	dsos_obj_t;
 typedef struct dsos_s		dsos_t;
 typedef struct dsos_schema_s	dsos_schema_t;
+typedef void (*dsos_obj_cb_t)(sos_obj_t, void *);
 
 typedef struct {
 	void	*ptr1;
@@ -74,6 +76,8 @@ typedef struct dsos_req_s {
 	size_t			resp_len;      // actual size of resp (for response)
 	dsos_req_cb_t		cb;            // response callback
 	void			*ctxt;         // for callbacks
+	void			*ctxt2;        // for callbacks
+	void			*ctxt3;        // for callbacks
 	sem_t			sem;           // for signaling the response
 	dsos_conn_t		*conn;         // server connection object
 	dsos_req_all_t		*req_all;      // if part of a req_all
@@ -148,26 +152,6 @@ typedef struct dsos_iter_s {
 	struct rbt	rbt;                  // for finding min key value of recvd objs
 	dsos_iter_prefetch_cb_t	cb;           // callback for prefetched-obj arrival
 } dsos_iter_t;
-
-/*
- * DSOS object.
- */
-typedef enum {
-	DSOS_OBJ_INLINE  = 0x00000001,
-	DSOS_OBJ_CREATED = 0x00000002
-} dsos_obj_type_t;
-typedef void (*dsos_obj_cb_t)(dsos_obj_t *, void *);
-typedef struct dsos_obj_s {
-	ods_atomic_t		refcount;
-	dsos_obj_type_t		flags;
-	sos_obj_t		sos_obj;       // the actual SOS object
-	dsos_schema_t		*schema;
-	dsosd_objid_t		obj_id;        // global object id, valid once the resp comes in
-	dsos_req_t		*req;          // server req to create this obj
-	dsos_req_all_t		*req_all;      // server req(s) to index this obj
-	dsos_obj_cb_t		cb;            // response callback
-	void			*ctxt;         // for callbacks
-} dsos_obj_t;
 
 /*
  * Connection object.
@@ -267,12 +251,17 @@ int	dsos_rpc_schema_from_template(rpc_schema_from_template_in_t  *args_inp,
 				      rpc_schema_from_template_out_t *args_outp);
 
 typedef struct {
-	dsos_obj_t	*obj;
+	sos_obj_t	obj;
+	dsos_schema_t	*schema;
+	dsos_obj_cb_t	cb;
+	void		*ctxt;
 } rpc_object_create_in_t;
-typedef struct {
-	dsosd_objid_t	obj_id;
-} rpc_object_create_out_t;
 int	dsos_rpc_object_create(rpc_object_create_in_t *args_inp);
+
+typedef struct {
+	sos_obj_t	obj;
+} rpc_object_delete_in_t;
+int	dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp);
 
 typedef struct {
 	char		name[DSOSD_MSG_MAX_PATH];
@@ -302,31 +291,6 @@ typedef struct {
 } rpc_part_find_out_t;
 int	dsos_rpc_part_find(rpc_part_find_in_t  *args_inp,
 			   rpc_part_find_out_t *args_outp);
-
-// This RPC is asynchronous, so the results came back via a callback.
-typedef struct {
-	int		server_num;
-	dsos_obj_t	*obj;
-	int		num_attrs;
-	sos_value_t	*attrs;
-} rpc_obj_index_in_t;
-int	dsos_rpc_obj_index(rpc_obj_index_in_t *args_inp);
-
-typedef struct {
-	int		server_num;
-	dsosd_handle_t	cont_handle;
-	dsosd_handle_t	schema_handle;
-	sos_attr_t	attr;
-	sos_key_t	key;
-	sos_obj_t	sos_obj;
-} rpc_obj_find_in_t;
-typedef struct {
-	int		status;
-	sos_obj_ref_t	obj_id;
-	sos_obj_t	sos_obj;
-} rpc_obj_find_out_t;
-int	dsos_rpc_obj_find(rpc_obj_find_in_t  *args_inp,
-			  rpc_obj_find_out_t *args_outp);
 
 typedef struct {
 	dsosd_handle_t	cont_handle;
@@ -418,8 +382,7 @@ void		*dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz);
 			__ods_log_fp = stderr;					\
 		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
-		sleep(1000000);							\
-		exit(1);							\
+		assert(0);							\
 	} while (0);
 
 #endif

@@ -195,6 +195,7 @@ struct sos_obj_s {
 	sos_schema_t schema;
 	sos_obj_ref_t obj_ref;
 	ods_obj_t obj;
+	void *ctxt;
 	LIST_ENTRY(sos_obj_s) entry;
 };
 #define SOS_OBJ(_o_) ODS_PTR(sos_obj_data_t, (_o_))

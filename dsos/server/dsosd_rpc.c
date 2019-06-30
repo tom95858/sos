@@ -7,6 +7,23 @@ static void	*rpc_serialize_schema(sos_schema_t schema, void *buf, size_t *psz);
 static void	rpc_free_schema_template(sos_schema_template_t t);
 static void	dump_schema_template(sos_schema_template_t t);
 
+dsosd_objid_t dsosd_objid(sos_obj_t sos_obj)
+{
+	dsosd_objid_t	obj_id;
+
+	/*
+	 * The DSOS object id is formed from the server # and the
+	 * local ODS reference.  The two unique identify an object
+	 * within a distributed container.  In DSOS we don't need
+	 * the partition identifier, because the ROOT partition
+	 * is always implied.
+	 */
+	obj_id.serv = g.opts.server_num;
+	obj_id.obj  = sos_obj_ref(sos_obj).ref.obj;
+
+	return obj_id;
+}
+
 static dsosd_handle_t dsosd_ptr_to_handle(dsosd_client_t *client, void *ptr)
 {
 	struct ptr_rbn	*rbn;
@@ -106,18 +123,12 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 	sos_obj_data_get(obj, &obj_data, &obj_max_sz);
 	assert(resp->hdr2.obj_sz == obj_max_sz);
 
-	/*
-	 * The DSOS object id is formed from the server # and the
-	 * local ODS reference.  The two unique identify an object
-	 * within a distributed container.
-	 */
-	resp->obj_id.serv = g.opts.server_num;
-	resp->obj_id.ods  = sos_obj_ref(obj).ref.obj;
+	resp->hdr2.obj_id = dsosd_objid(obj);
 
 	dsosd_debug("new obj %p obj_data %p obj_sz %d id %08lx%08lx\n",
 		    obj, obj_data, obj_max_sz,
-		    resp->obj_id.serv,
-		    resp->obj_id.ods);
+		    resp->hdr2.obj_id.serv,
+		    resp->hdr2.obj_id.obj);
 
 	if (msg->hdr.flags & DSOSD_MSG_IMM) {
 		/* The object data is in the recv buffer. Copy it to the object. */
@@ -157,6 +168,50 @@ void rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t 
 			sos_obj_put(obj);
 		}
 	}
+}
+
+void rpc_handle_obj_delete(zap_ep_t ep, dsosd_msg_obj_delete_req_t *msg, size_t len)
+{
+	int				ret;
+	sos_t				cont;
+	sos_part_t			part;
+	sos_obj_t			obj;
+	sos_obj_ref_t			obj_ref;
+	dsosd_client_t			*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
+	cont = (sos_t)dsosd_handle_to_ptr(client, msg->cont_handle);
+	if (!cont) {
+		ret = EBADF;
+		goto out;
+	}
+
+	/*
+	 * Re-create the local object reference from the DSOS reference.
+	 */
+	obj_ref = msg->hdr2.obj_id.as_ref;
+	part = sos_part_find(cont, "ROOT");
+	if (!part) {
+		ret = EBADFD;
+		goto out;
+	}
+	obj_ref.ref.ods = sos_part_id(part);
+
+	obj = sos_ref_as_obj(cont, obj_ref);
+	if (!obj) {
+		ret = ENOENT;
+		goto out;
+	}
+	sos_obj_remove(obj);
+	sos_obj_delete(obj);
+	sos_obj_put(obj);
+	ret = 0;
+ out:
+	dsosd_debug("status %d ep %d msg %p len %d: cont %p/%p part %p id %d obj %p %08lx%08lx\n",
+		    ret, ep, msg, len, msg->cont_handle, cont, part, sos_part_id(part),
+		    obj, msg->hdr2.obj_id.serv, msg->hdr2.obj_id.obj);
+
+	dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_DELETE_RESP, msg->hdr.id,
+				       sizeof(dsosd_msg_obj_delete_resp_t), ret);
 }
 
 static char *rewrite_path(char *path)
@@ -630,158 +685,6 @@ int deserialize_buf(char **val_data, char **pbuf, size_t *psz)
 	return count;
 }
 
-static sos_index_t get_index(dsosd_client_t *client, sos_t cont, sos_schema_t schema,
-			     sos_attr_t attr)
-{
-	int		ret;
-	char		*nm;
-	struct ptr_rbn	*rbn;
-	sos_index_t	idx;
-
-	asprintf(&nm, "dsos_%s_%s", sos_schema_name(schema), sos_attr_name(attr));
-
-	pthread_mutex_lock(&client->idx_rbt_lock);
-	rbn = (struct ptr_rbn *)rbt_find(&client->idx_rbt, nm);
-	if (!rbn) {
-		idx = sos_index_open(cont, nm);
-		if (!idx) {
-			dsosd_debug("creating idx %s client %p\n", nm, client);
-			ret = sos_index_new(cont, nm, "BXTREE", sos_attr_type(attr), NULL);
-			if (ret)
-				goto err;
-		}
-		idx = sos_index_open(cont, nm);
-		if (!idx)
-			goto err;
-		dsosd_debug("opened idx %s client %p\n", nm, client);
-		rbn = calloc(1, sizeof(struct ptr_rbn));
-		if (!rbn)
-			dsosd_fatal("out of memory\n");
-		rbn_init((struct rbn *)rbn, strdup(nm));
-		rbn->ptr = idx;
-		rbt_ins(&client->idx_rbt, (void *)rbn);
-	}
-	pthread_mutex_unlock(&client->idx_rbt_lock);
-	dsosd_debug("using idx %p for idx %s client %p\n", idx, nm, client);
-	free(nm);
-	return (sos_index_t)rbn->ptr;
- err:
-	pthread_mutex_unlock(&client->idx_rbt_lock);
-	free(nm);
-	return NULL;
-}
-
-static int do_obj_index(dsosd_client_t *client, sos_t cont, sos_attr_t attr, int val_len,
-			char *val_data, dsosd_objid_t obj_id)
-{
-	int		ret;
-	sos_index_t	idx;
-	sos_key_t	key;
-
-	idx = get_index(client, cont, sos_attr_schema(attr), attr);
-	if (!idx)
-		return ENOENT;
-
-	key = sos_key_new(val_len);
-	sos_key_set(key, val_data, val_len);
-
-	ret = sos_index_insert_ref(idx, key, obj_id.as_obj_ref);
-
-	sos_key_put(key);
-
-	return ret;
-}
-
-void rpc_handle_obj_index(zap_ep_t ep, dsosd_msg_obj_index_req_t *msg, size_t len)
-{
-	int		i, ret;
-	char		*buf, *val_data;
-	int		attr_id, val_len;
-	size_t		buf_len;
-	sos_t		cont;
-	sos_schema_t	schema;
-	sos_attr_t	attr;
-	dsosd_req_t	*req;
-	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
-
-	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
-	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
-	if (!cont || !schema) {
-		dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_INDEX_RESP, msg->hdr.id,
-					       sizeof(dsosd_msg_obj_index_resp_t), EBADF);
-		return;
-	}
-
-	buf     = msg->data;
-	buf_len = msg->data_len;
-
-	dsosd_debug("ep %p msg %p len %d obj_id %08lx%08lx cont %p schema %p %d attrs\n",
-		    ep, msg, len, msg->obj_id, cont, schema, msg->num_attrs);
-
-	ret = 0;
-	for (i = 0; i < msg->num_attrs; ++i) {
-		attr_id = deserialize_uint32(&buf, &buf_len);
-		val_len = deserialize_buf(&val_data, &buf, &buf_len);
-		attr    = sos_schema_attr_by_id(schema, attr_id);
-		ret = ret || do_obj_index(client, cont, attr, val_len, val_data, msg->obj_id);
-	}
-	dsosd_debug("ret %d\n", ret);
-
-	dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_INDEX_RESP, msg->hdr.id,
-				       sizeof(dsosd_msg_obj_index_resp_t), ret);
-}
-
-void rpc_handle_obj_find(zap_ep_t ep, dsosd_msg_obj_find_req_t *msg, size_t len)
-{
-	int		ret;
-	char		*buf, *key_data;
-	int		key_len;
-	size_t		buf_len;
-	sos_t		cont;
-	sos_schema_t	schema;
-	sos_attr_t	attr;
-	sos_index_t	idx;
-	sos_key_t	key;
-	sos_obj_t	sos_obj;
-	dsosd_req_t	*req;
-	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
-
-	req = dsosd_req_new(client, DSOSD_MSG_OBJ_FIND_RESP, msg->hdr.id,
-			    sizeof(dsosd_msg_obj_find_resp_t));
-
-	schema = dsosd_handle_to_ptr(client, msg->schema_handle);
-	cont   = dsosd_handle_to_ptr(client, msg->cont_handle);
-	if (!cont || !schema) {
-		req->resp->u.hdr.status = EBADF;
-		req->resp->u.hdr.flags  = 0;
-		dsosd_req_complete(req, sizeof(dsosd_msg_obj_find_resp_t));
-		return;
-	}
-	attr = sos_schema_attr_by_id(schema, msg->attr_id);
-
-	buf     = msg->data;
-	buf_len = msg->data_len;
-	key_len = deserialize_buf(&key_data, &buf, &buf_len);
-	key     = sos_key_new(key_len);
-	sos_key_set(key, key_data, key_len);
-
-	idx = get_index(client, cont, schema, attr);
-	if (idx)
-		ret = sos_index_find_ref(idx, key, &req->resp->u.obj_find_resp.obj_id.as_obj_ref);
-	else
-		ret = ENOENT;
-
-	sos_key_put(key);
-
-	dsosd_debug("ep %p schema %p attr_id %d key_len %d idx %p sos_obj %p obj_id %08lx%08lx\n",
-		    ep, schema, msg->attr_id, key_len, idx, sos_obj,
-		    req->resp->u.obj_find_resp.obj_id.as_obj_ref.ref.ods,
-		    req->resp->u.obj_find_resp.obj_id.as_obj_ref.ref.obj);
-
-	req->resp->u.hdr.status = ret;
-	dsosd_req_complete(req, sizeof(dsosd_msg_obj_find_resp_t));
-}
-
 void rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len)
 {
 	sos_t		cont;
@@ -801,12 +704,12 @@ void rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len)
 	primary = __sos_primary_obj_part(cont);
 	if (!primary)
 		return;
-	msg->obj_id.as_obj_ref.ref.ods = sos_part_id(primary);
+	msg->obj_id.as_ref.ref.ods = sos_part_id(primary);
 
-	sos_obj = sos_ref_as_obj(cont, msg->obj_id.as_obj_ref);
+	sos_obj = sos_ref_as_obj(cont, msg->obj_id.as_ref);
 
 	dsosd_debug("ep %p obj_id %08lx%08lx sos_obj %p\n", ep,
-		    msg->obj_id.as_obj_ref.ref.ods, msg->obj_id.as_obj_ref.ref.obj,
+		    msg->obj_id.as_ref.ref.ods, msg->obj_id.as_ref.ref.obj,
 		    sos_obj);
 
 	if (sos_obj)

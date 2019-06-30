@@ -259,7 +259,7 @@ usage:
 	return 0;
 }
 
-static void obj_cb(dsos_obj_t *obj, void *ctxt)
+static void obj_cb(sos_obj_t obj, void *ctxt)
 {
 	sem_post((sem_t *)ctxt);
 }
@@ -274,7 +274,7 @@ int do_import(int ac, char *av[])
 	char		*cont_nm = NULL, *schema_nm = NULL, *buf, *tok;
 	dsos_t		*cont;
 	dsos_schema_t	*schema;
-	dsos_obj_t	*obj;
+	sos_obj_t	obj;
 	sos_attr_t	attr;
 	sos_schema_t	sos_schema;
 	sem_t		sem;
@@ -334,7 +334,7 @@ int do_import(int ac, char *av[])
 	while (fgets(buf, bufsz, fp)) {
 		if (buf[strlen(buf)-1] == '\n')
 			buf[strlen(buf)-1] = 0;  // chomp
-		obj = dsos_obj_alloc(schema, obj_cb, &sem);
+		obj = dsos_obj_alloc(schema);
 		if (!obj) {
 			fprintf(stderr, "could not create object %d\n", i);
 			exit(1);
@@ -345,18 +345,18 @@ int do_import(int ac, char *av[])
 				fprintf(stderr, "could not get attribute #%d\n", i);
 				return 1;
 			}
-			ret = sos_obj_attr_from_str(obj->sos_obj, attr, tok, NULL);
+			ret = sos_obj_attr_from_str(obj, attr, tok, NULL);
 			if (ret) {
 				fprintf(stderr, "error setting attribute %s\n", sos_attr_name(attr));
 				return 1;
 			}
 		}
-		ret = dsos_obj_create(obj);
+		ret = dsos_obj_create(obj, obj_cb, &sem);
 		if (ret) {
 			fprintf(stderr, "error %d creating DSOS object\n", ret);
 			return 1;
 		}
-		dsos_obj_put(obj);
+		sos_obj_put(obj);
 		++num_objs;
 	}
 	free(buf);

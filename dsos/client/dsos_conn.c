@@ -50,14 +50,10 @@ const char *dsos_msg_type_to_str(int id)
 		return "DSOSD_OBJ_CREATE_REQ";
 	    case DSOSD_MSG_OBJ_CREATE_RESP:
 		return "DSOSD_OBJ_CREATE_RESP";
-	    case DSOSD_MSG_OBJ_INDEX_REQ:
-		return "DSOSD_OBJ_INDEX_REQ";
-	    case DSOSD_MSG_OBJ_INDEX_RESP:
-		return "DSOSD_OBJ_INDEX_RESP";
-	    case DSOSD_MSG_OBJ_FIND_REQ:
-		return "DSOSD_OBJ_FIND_REQ";
-	    case DSOSD_MSG_OBJ_FIND_RESP:
-		return "DSOSD_OBJ_FIND_RESP";
+	    case DSOSD_MSG_OBJ_DELETE_REQ:
+		return "DSOSD_OBJ_DELETE_REQ";
+	    case DSOSD_MSG_OBJ_DELETE_RESP:
+		return "DSOSD_OBJ_DELETE_RESP";
 	    case DSOSD_MSG_OBJ_GET_REQ:
 		return "DSOSD_OBJ_GET_REQ";
 	    case DSOSD_MSG_OBJ_GET_RESP:

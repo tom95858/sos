@@ -24,7 +24,7 @@ int		local = 0;
 int		verbose = 0;
 int		server_num;
 char		*cont_nm = "/tmp/cont.sos";
-struct timespec	ts;
+struct timespec	sleep_ts;
 uint8_t		id;
 uint64_t	nsecs;
 sem_t		sem;
@@ -36,7 +36,7 @@ sos_attr_t	attr_seq, attr_hash, attr_data, attr_int1, attr_int2;
 
 uint64_t	hash(void *buf, int len);
 void		do_obj_creates();
-void		do_obj_finds();
+void		do_obj_deletes();
 void		do_obj_iter();
 void		do_obj_iter_finds();
 void		do_init();
@@ -58,7 +58,7 @@ void usage(char *av[])
 int main(int ac, char *av[])
 {
 	int		c, i, ret;
-	int		delete_cont = 0, find = 0, iter = 0, loop = 0, create = 0, ping = 0;
+	int		delete_cont = 0, find = 0, iter = 0, loop = 0, create = 0, ping = 0, deletes = 0;
 	char		*config = NULL;
 
 	struct option	lopts[] = {
@@ -67,6 +67,7 @@ int main(int ac, char *av[])
 		{ "cont",	required_argument, NULL, 'C' },
 		{ "create",     no_argument,       NULL, 'o' },
 		{ "delete",     no_argument,       NULL, 'D' },
+		{ "deletes",    no_argument,       NULL, 'G' },
 		{ "iter",       no_argument,       NULL, 'l' },
 		{ "local",      no_argument,       NULL, 'u' },
 		{ "loop",       no_argument,       NULL, 'L' },
@@ -103,6 +104,9 @@ int main(int ac, char *av[])
 			break;
 		    case 'l':
 			iter = 1;
+			break;
+		    case 'G':
+			deletes = 1;
 			break;
 		    case 'g':
 			progress = 1;
@@ -148,8 +152,8 @@ int main(int ac, char *av[])
 
 	srandom(time(NULL));
 	nsecs = sleep_msec * 1000000;
-	ts.tv_sec  = nsecs / 1000000000;
-	ts.tv_nsec = nsecs % 1000000000;
+	sleep_ts.tv_sec  = nsecs / 1000000000;
+	sleep_ts.tv_nsec = nsecs % 1000000000;
 
 	ret = dsos_init(config);
 	if (ret) {
@@ -206,6 +210,8 @@ int main(int ac, char *av[])
 
 	if (create)
 		do_obj_creates();
+	if (deletes)
+		do_obj_deletes();
 	if (iter)
 		do_obj_iter();
 	if (find)
@@ -287,28 +293,6 @@ void do_init()
 		fprintf(stderr, "could not get attr int2 from schema\n");
 		exit(1);
 	}
-}
-
-void idx_cb(dsos_obj_t *obj, void *ctxt)
-{
-	int				i;
-	pid_t				tid;
-	uint64_t			obj_serial = (uintptr_t)ctxt;
-	dsosd_msg_obj_index_resp_t	*resp;
-
-	tid = (pid_t)syscall(SYS_gettid);
-	for (i = 0; i < obj->req_all->num_servers; ++i) {
-		if (!obj->req_all->reqs[i])
-			continue;
-		resp = (dsosd_msg_obj_index_resp_t *)obj->req_all->reqs[i]->resp;
-		if (!resp)
-			continue;
-		if (resp->hdr.status)
-			printf("[%5d] obj %d server %d status %d\n", tid, obj_serial,
-			       i, resp->hdr.status);
-	}
-
-	sem_post(&sem2);
 }
 
 struct sos_schema_template schema_template = {
@@ -394,27 +378,8 @@ dsos_t *create_cont(char *path, int perms)
 	return cont;
 }
 
-void obj_cb(dsos_obj_t *obj, void *ctxt)
+void obj_cb(sos_obj_t obj, void *ctxt)
 {
-	int				ret;
-	pid_t				tid = 0;
-	uint64_t			i = (uintptr_t)ctxt;
-	dsosd_msg_obj_create_resp_t	*resp = (dsosd_msg_obj_create_resp_t *)obj->req->resp;
-
-//	tid = (pid_t)syscall(SYS_gettid);
-	if (!resp) {
-		printf("[%5d] obj %p ctxt %p no response from server\n", tid, obj, ctxt);
-		return;
-	}
-#if 0
-	printf("[%5d] obj %d server %d status %d flags %08x obj_id %08lx%08lx len %d\n",
-	       tid, i,
-	       obj->req->conn->server_id, resp->hdr.status, resp->hdr.flags,
-	       resp->obj_id.serv, resp->obj_id.ods, resp->len);
-	fflush(stdout);
-#endif
-//	refs[i] = resp->obj_id.as_obj_ref;
-
 	sem_post(&sem);
 }
 
@@ -423,7 +388,7 @@ void do_obj_creates()
 	int		i, ret;
 	uint64_t	num;
 	char		*mydata;
-	dsos_obj_t	*obj;
+	sos_obj_t	obj;
 	struct timespec	beg, end, last;
 	uint64_t	nsecs;
 
@@ -434,35 +399,42 @@ void do_obj_creates()
 	clock_gettime(CLOCK_REALTIME, &last);
 
 	for (i = 0; i < num_iters; ++i) {
-		obj = dsos_obj_alloc(schema, obj_cb, (void *)(uintptr_t)i);
+		obj = dsos_obj_alloc(schema);
 		if (!obj) {
 			fprintf(stderr, "could not create object %d", i);
 			exit(1);
 		}
 
 		sprintf(mydata, "seq=%08x", num);
-		sos_obj_attr_value_set(obj->sos_obj, attr_seq, num);
-		sos_obj_attr_value_set(obj->sos_obj, attr_int1, num);
-		sos_obj_attr_value_set(obj->sos_obj, attr_int2, num);
-		sos_obj_attr_value_set(obj->sos_obj, attr_hash, hash(mydata, 400));
-		sos_obj_attr_value_set(obj->sos_obj, attr_data, strlen(mydata)+1, mydata);
+		sos_obj_attr_value_set(obj, attr_seq, num);
+		sos_obj_attr_value_set(obj, attr_int1, num);
+		sos_obj_attr_value_set(obj, attr_int2, num);
+		sos_obj_attr_value_set(obj, attr_hash, hash(mydata, 400));
+		sos_obj_attr_value_set(obj, attr_data, strlen(mydata)+1, mydata);
 		num += 1;
 
-		ret = dsos_obj_create(obj);
+		ret = dsos_obj_create(obj, obj_cb, (void *)(uintptr_t)i);
 		if (ret) {
 			fprintf(stderr, "dsos_obj_create %d\n", ret);
 			exit(1);
 		}
 
-		dsos_obj_put(obj);
-
 		if (sequential)
 			sem_wait(&sem);
+#if 0
+		// XXX for debug only
+		dsos_obj_delete(obj);
+#else
+		sos_obj_put(obj);
+#endif
 
 		if (progress && i && ((i % 50000) == 0)) {
 			print_elapsed(50000, i, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
+
+		if (sleep_msec)
+			nanosleep(&sleep_ts, NULL);
 	}
 
 	if (!sequential) {
@@ -472,35 +444,6 @@ void do_obj_creates()
 	}
 
 	print_elapsed(50000, num_iters, beg, last);
-}
-
-void do_obj_finds()
-{
-	int		i;
-	uint64_t	num;
-	char		*mydata;
-	sos_key_t	key;
-	sos_obj_t	sos_obj;
-
-	mydata = malloc(4000);
-	num = start_num;
-	for (i = 0; i < num_iters; ++i) {
-		key = sos_key_for_attr(NULL, attr_seq, num);
-		sos_obj = dsos_obj_find(schema, attr_seq, key);
-		if (sos_obj) {
-			char buf1[16], buf2[32];
-			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
-			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
-			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
-			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
-		} else {
-			printf("obj %d NOT FOUND\n", num);
-			break;
-		}
-		fflush(stdout);
-		sos_obj_put(sos_obj);
-		++num;
-	}
 }
 
 void do_obj_iter()
@@ -515,7 +458,6 @@ void do_obj_iter()
 		printf("could not create iter\n");
 		exit(1);
 	}
-	printf("created dsos iter\n");
 	mydata = malloc(4000);
 	num = start_num;
 	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
@@ -546,7 +488,6 @@ void do_obj_iter_finds()
 		printf("could not create iter\n");
 		exit(1);
 	}
-	printf("created dsos iter\n");
 	mydata = malloc(4000);
 	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
@@ -565,6 +506,48 @@ void do_obj_iter_finds()
 			break;
 		}
 		sos_obj_put(sos_obj);
+		++num;
+		if (progress && i && ((i % 50000) == 0)) {
+			print_elapsed(50000, i, beg, last);
+			clock_gettime(CLOCK_REALTIME, &last);
+		}
+	}
+	print_elapsed(50000, num_iters, beg, last);
+	dsos_iter_close(iter);
+}
+
+void do_obj_deletes()
+{
+	int		i;
+	uint64_t	num;
+	char		*mydata;
+	dsos_iter_t	*iter;
+	sos_key_t	key;
+	sos_obj_t	sos_obj;
+	struct timespec	beg, last;
+
+	iter = dsos_iter_new(schema, attr_seq);
+	if (!iter) {
+		printf("could not create iter\n");
+		exit(1);
+	}
+	mydata = malloc(4000);
+	num = start_num;
+	clock_gettime(CLOCK_REALTIME, &beg);
+	clock_gettime(CLOCK_REALTIME, &last);
+	for (i = 0; i < num_iters; ++i) {
+		sos_obj = dsos_iter_begin(iter);
+		if (sos_obj) {
+			char buf1[16], buf2[32];
+			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
+			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
+			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+		} else {
+			printf("obj %d NOT FOUND\n", num);
+			break;
+		}
+		dsos_obj_delete(sos_obj);
 		++num;
 		if (progress && i && ((i % 50000) == 0)) {
 			print_elapsed(50000, i, beg, last);

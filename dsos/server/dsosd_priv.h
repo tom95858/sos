@@ -5,6 +5,7 @@
 #include <semaphore.h>
 #include <sys/queue.h>
 #include <errno.h>
+#include <assert.h>
 #include <zap.h>
 #include "mmalloc.h"
 #include "dsosd_msg_layout.h"
@@ -100,6 +101,7 @@ typedef struct dsosd_client_s {
 void		dsosd_client_get(dsosd_client_t *client);
 dsosd_client_t	*dsosd_client_new(zap_ep_t ep);
 void		dsosd_client_put(dsosd_client_t *client);
+dsosd_objid_t	dsosd_objid(sos_obj_t sos_obj);
 zap_err_t	dsosd_req_complete(dsosd_req_t *req, size_t len);
 void		dsosd_req_get(dsosd_req_t *req);
 dsosd_req_t	*dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t msg_len);
@@ -111,8 +113,7 @@ void		rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg
 void		rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *msg, size_t len);
 void		rpc_handle_container_new(zap_ep_t ep, dsosd_msg_container_new_req_t *msg, size_t len);
 void		rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len);
-void		rpc_handle_obj_index(zap_ep_t ep, dsosd_msg_obj_index_req_t *msg, size_t len);
-void		rpc_handle_obj_find(zap_ep_t ep, dsosd_msg_obj_find_req_t *msg, size_t len);
+void		rpc_handle_obj_delete(zap_ep_t ep, dsosd_msg_obj_delete_req_t *msg, size_t len);
 void		rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len);
 void		rpc_handle_part_create(zap_ep_t ep, dsosd_msg_part_create_req_t *msg, size_t len);
 void		rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t len);
@@ -130,8 +131,7 @@ void		rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_templat
 			__ods_log_fp = stderr;					\
 		__ods_log_mask = 0xff;						\
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
-		sleep(1000000);							\
-		exit(1);							\
+		assert(0);							\
 	} while (0);
 
 #endif
