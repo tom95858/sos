@@ -192,7 +192,7 @@ static void debug_verify_node(bxt_t t, ods_obj_t node)
 	ods_obj_t rec;
 	ods_ref_t rec_ref;
 	if (!node)
-	    return;
+		return;
 	assert(NODE(node)->count <= t->udata->order);
 	for (i = 0; i < NODE(node)->count; i++) {
 		if (NODE(node)->is_leaf) {
@@ -1883,7 +1883,6 @@ static ods_ref_t entry_delete(bxt_t t, ods_obj_t node, ods_obj_t rec, int ent)
  next_level:
 	parent = ods_ref_as_obj(t->ods, NODE(node)->parent);
 #ifdef ODS_DEBUG
-	debug_verify_node(t, node);
 	debug_verify_node(t, parent);
 #endif
 	/* Remove the record and object from the node */
@@ -1891,7 +1890,9 @@ static ods_ref_t entry_delete(bxt_t t, ods_obj_t node, ods_obj_t rec, int ent)
 		NODE(node)->entries[i] = NODE(node)->entries[i+1];
 	NODE(node)->entries[NODE(node)->count-1] = ENTRY_INITIALIZER;
 	NODE(node)->count--;
-
+#ifdef ODS_DEBUG
+	debug_verify_node(t, node);
+#endif
 	if (ods_obj_ref(node) == t->udata->root_ref) {
 		/* This is the root of the tree. */
 		switch (NODE(node)->count) {
