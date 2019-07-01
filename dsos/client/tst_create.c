@@ -302,7 +302,7 @@ struct sos_schema_template schema_template = {
 		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 1 },
 		{ .name = "int1", .type = SOS_TYPE_UINT64,     .indexed = 1 },
 		{ .name = "int2", .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 1000 },
+		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 9000 },
 		{ .name = NULL }
 	}
 };
@@ -314,7 +314,8 @@ dsos_t *create_cont(char *path, int perms)
 	dsos_part_t	*part;
 	dsos_schema_t	*schema;
 
-	printf("creating container\n");
+	if (verbose)
+		printf("creating container\n");
 
 	ret = dsos_container_new(path, perms);
 	if (ret) {
@@ -373,7 +374,8 @@ dsos_t *create_cont(char *path, int perms)
 		exit(1);
 	}
 
-	printf("container created\n");
+	if (verbose)
+		printf("container created\n");
 
 	return cont;
 }
@@ -381,6 +383,7 @@ dsos_t *create_cont(char *path, int perms)
 void obj_cb(sos_obj_t obj, void *ctxt)
 {
 	sem_post(&sem);
+	sos_obj_put(obj);
 }
 
 void do_obj_creates()
@@ -421,12 +424,6 @@ void do_obj_creates()
 
 		if (sequential)
 			sem_wait(&sem);
-#if 0
-		// XXX for debug only
-		dsos_obj_delete(obj);
-#else
-		sos_obj_put(obj);
-#endif
 
 		if (progress && i && ((i % 50000) == 0)) {
 			print_elapsed(50000, i, beg, last);
@@ -525,6 +522,7 @@ void do_obj_deletes()
 	sos_key_t	key;
 	sos_obj_t	sos_obj;
 	struct timespec	beg, last;
+	char		buf1[16], buf2[32];
 
 	iter = dsos_iter_new(schema, attr_seq);
 	if (!iter) {
@@ -537,17 +535,18 @@ void do_obj_deletes()
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
 		sos_obj = dsos_iter_begin(iter);
-		if (sos_obj) {
-			char buf1[16], buf2[32];
+		if (!sos_obj) {
+			printf("obj %d NOT FOUND\n", num);
+			break;
+		}
+		if (sos_obj && verbose) {
 			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
 			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
 			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
 			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
-		} else {
-			printf("obj %d NOT FOUND\n", num);
-			break;
 		}
 		dsos_obj_delete(sos_obj);
+
 		++num;
 		if (progress && i && ((i % 50000) == 0)) {
 			print_elapsed(50000, i, beg, last);
@@ -555,6 +554,13 @@ void do_obj_deletes()
 		}
 	}
 	print_elapsed(50000, num_iters, beg, last);
+	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
+		sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
+		sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
+		sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+		printf("OBJ REMAINING: obj %s %s %s\n", buf1, mydata, buf2);
+		sos_obj_put(sos_obj);
+	}
 	dsos_iter_close(iter);
 }
 

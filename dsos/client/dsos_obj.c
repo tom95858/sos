@@ -1,5 +1,10 @@
 #include "dsos_priv.h"
 
+int dsos_obj_server(sos_obj_t obj)
+{
+	return obj->obj_ref.ref.ods;
+}
+
 sos_obj_t dsos_obj_alloc(dsos_schema_t *schema)
 {
 	sos_obj_t obj = sos_obj_malloc(schema->sos_schema);
@@ -16,6 +21,8 @@ int dsos_obj_create(sos_obj_t obj, dsos_obj_cb_t cb, void *ctxt)
 	args_in.obj    = obj;
 	args_in.cb     = cb;
 	args_in.ctxt   = ctxt;
+
+	sos_obj_get(obj);  // this ref is dropped in obj_create_cb()
 
 	return dsos_rpc_object_create(&args_in);
 }

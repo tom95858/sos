@@ -535,6 +535,8 @@ static void obj_create_cb(dsos_req_t *req, size_t len, void *ctxt)
 
 	obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
 	cb(obj, req->ctxt3);
+	/* Drop the ref taken in dsos_obj_create(). */
+	sos_obj_put(obj);
 }
 
 // This call is asynchronous.
@@ -602,7 +604,7 @@ int dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp)
 		return ENOMEM;
 
 	schema     = (dsos_schema_t *)args_inp->obj->ctxt;
-	server_num = args_inp->obj->obj_ref.ref.ods;
+	server_num = dsos_obj_server(args_inp->obj);
 
 	dsos_debug("obj %p %08lx%08lx\n", args_inp->obj,
 		   args_inp->obj->obj_ref.ref.ods, args_inp->obj->obj_ref.ref.obj);
@@ -947,9 +949,9 @@ static void rpc_iter_step_all_cb(dsos_req_t *req, size_t len, void *ctxt)
 			memcpy(obj_data, resp->data, obj_sz);
 			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
 		} else {
-			dsos_debug("obj len %d from server %d\n", obj_sz, server_num);
+			dsos_debug("obj len %d from server %d\n", resp->hdr2.obj_sz, server_num);
 		}
-		args_inp->sos_objs[server_num]->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
+		args_inp->sos_objs[server_num]->obj_ref.ref = resp->hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		args_outp->found[server_num] = 0;
@@ -1111,17 +1113,19 @@ static void rpc_step_one_async_cb(dsos_req_t *req, size_t len, void *ctxt)
 	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
 	dsos_iter_t			*iter = (dsos_iter_t *)ctxt;
 	int				server_num = req->conn->server_id;
+	dsos_req_cb2_t			cb  = req->ctxt2;
+	sos_obj_t			obj = req->ctxt3;
 
 	switch (resp->hdr.status) {
 	    case 0:
 		if (resp->hdr.flags & DSOSD_MSG_IMM) {
-			sos_obj_data_get(iter->sos_objs[server_num], &obj_data, &obj_sz);
+			sos_obj_data_get(obj, &obj_data, &obj_sz);
 			memcpy(obj_data, resp->data, obj_sz);
-			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
+			dsos_debug("obj %p len %d from server %d inline\n", obj, obj_sz, server_num);
 		} else {
-			dsos_debug("obj len %d from server %d\n", resp->hdr2.obj_sz, server_num);
+			dsos_debug("obj %p len %d from server %d\n", obj, resp->hdr2.obj_sz, server_num);
 		}
-		iter->sos_objs[server_num]->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
+		obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		dsos_debug("no obj from server %d\n", server_num);
@@ -1134,11 +1138,12 @@ static void rpc_step_one_async_cb(dsos_req_t *req, size_t len, void *ctxt)
 	 * Call the iterator callback. This is only to avoid mixing
 	 * RPC- and API-layer abstractions.
 	 */
-	iter->cb(req, iter);
+	cb(req, iter, obj);
 }
 
-int dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
+dsos_req_t *dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
 {
+	int				ret;
 	size_t				obj_sz;
 	char				*obj_data;
 	dsos_req_t			*req;
@@ -1148,7 +1153,9 @@ int dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
 
 	req = dsos_req_new(rpc_step_one_async_cb, args_inp->iter);
 	if (!req)
-		return ENOMEM;
+		return NULL;
+	req->ctxt2 = args_inp->cb;
+	req->ctxt3 = args_inp->sos_obj;
 
 	/* Copy in args to the request message. */
 	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
@@ -1158,5 +1165,8 @@ int dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
 	msg->hdr2.obj_va = (uint64_t)obj_data;
 	msg->hdr2.obj_sz = obj_sz;
 
-	return dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
+	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
+	if (ret)
+		return NULL;
+	return req;
 }

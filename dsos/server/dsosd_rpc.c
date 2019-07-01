@@ -195,6 +195,7 @@ void rpc_handle_obj_delete(zap_ep_t ep, dsosd_msg_obj_delete_req_t *msg, size_t 
 		goto out;
 	}
 	obj_ref.ref.ods = sos_part_id(part);
+	sos_part_put(part);
 
 	obj = sos_ref_as_obj(cont, obj_ref);
 	if (!obj) {
@@ -207,7 +208,7 @@ void rpc_handle_obj_delete(zap_ep_t ep, dsosd_msg_obj_delete_req_t *msg, size_t 
 	ret = 0;
  out:
 	dsosd_debug("status %d ep %d msg %p len %d: cont %p/%p part %p id %d obj %p %08lx%08lx\n",
-		    ret, ep, msg, len, msg->cont_handle, cont, part, sos_part_id(part),
+		    ret, ep, msg, len, msg->cont_handle, cont, part, obj_ref.ref.ods,
 		    obj, msg->hdr2.obj_id.serv, msg->hdr2.obj_id.obj);
 
 	dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_DELETE_RESP, msg->hdr.id,

@@ -64,7 +64,8 @@ extern struct globals_s g;
 enum {
 	REQ_RESPONSE_COPIED = 0x00000001,
 };
-typedef void (*dsos_req_cb_t)(dsos_req_t *, size_t, void *);  // response callback fn
+typedef void (*dsos_req_cb_t)(dsos_req_t *, size_t, void *);   // response callback fn
+typedef void (*dsos_req_cb2_t)(dsos_req_t *, void *, void *);  // supports callbacks calling other callbacks
 typedef struct dsos_req_s {
 	ods_atomic_t		refcount;
 	uint32_t		flags;
@@ -133,24 +134,23 @@ typedef struct dsos_schema_s {
 /*
  * DSOS iteration object.
  */
-typedef void (*dsos_iter_prefetch_cb_t)(dsos_req_t *, dsos_iter_t *);
 struct iter_rbn {
 	struct rbn	rbn;
-	int		server_num;
+	sos_obj_t	obj;
 };
 typedef struct dsos_iter_s {
+	pthread_mutex_t	lock;
+	pthread_cond_t	prefetch_complete;
 	dsos_schema_t	*schema;
 	sos_attr_t	attr;                 // attr this is iterating over
 	dsosd_handle_t	*handles;             // vector of server sos_iter_t handles
 	int		done;                 // =1 when all servers are done w/the iteration
 	int		last_op;              // last iter op (begin,end,prev,next)
-	int		last_srvr;            // server from which the last obj was returned
+	int		last_server;          // owning server of the last returned obj
 	int		status;               // status of last prefetch
+	dsos_req_t	*prefetch_req;        // req of last prefetch
 	size_t		obj_sz;               // object size this iterates over
-	sos_obj_t	*sos_objs;            // vector of recvd objs
-	sem_t		sem;                  // signals when prefetched object is available
 	struct rbt	rbt;                  // for finding min key value of recvd objs
-	dsos_iter_prefetch_cb_t	cb;           // callback for prefetched-obj arrival
 } dsos_iter_t;
 
 /*
@@ -328,6 +328,7 @@ typedef struct {
 	dsos_iter_t	*iter;
 	sos_obj_t	sos_obj;
 	int		server_num;
+	dsos_req_cb2_t	cb;
 } rpc_iter_step_one_in_t;
 typedef struct {
 	int		found;
@@ -335,6 +336,7 @@ typedef struct {
 } rpc_iter_step_one_out_t;
 int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
 			       rpc_iter_step_one_out_t *args_outp);
+dsos_req_t *dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp);
 
 typedef struct {
 	dsosd_handle_t	*iter_handles;
@@ -357,6 +359,7 @@ void		dsos_err_set(int server_id, int status);
 int		*dsos_err_get(void);
 int		dsos_err_status(void);
 const char	*dsos_msg_type_to_str(int id);
+int		dsos_obj_server(sos_obj_t obj);
 dsos_req_t	*dsos_req_find(dsosd_msg_t *resp);
 void		dsos_req_get(dsos_req_t *req);
 void		dsos_req_init(void);

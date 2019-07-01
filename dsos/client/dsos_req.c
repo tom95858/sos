@@ -1,9 +1,12 @@
 /*
  * The DSOS request layer sends messages to one or more servers and
- * matches them up with response messages that later arrive.  It is used
- * by the RPC layer. A message is a 2k-byte buffer of formatted data
- * represented as a large union of C structures in dsos/server/dsos_msg_layout.h.
- * The RPC parameters are marshalled in and out of these messages.
+ * matches them up with response messages that later arrive.  A
+ * message is a 2k-byte buffer of formatted data represented as a
+ * large union of C structures in dsos/server/dsos_msg_layout.h.  The
+ * RPC layer marshalls arguments in and out of these messages to
+ * create a server request. Every request carries a client-unique
+ * 64-bit id that the server reflects back in its response message.
+ * The request layer uses this id to match request and response.
  *
  * To send a message to a single server, a request is first allocated:
  *
@@ -24,9 +27,10 @@
  *
  * The send is asynchronous. The DSOS server destined for the message
  * will send a response message which contains the same 64-bit message ID
- * as the request. This layer uses a red-black tree to match up these
+ * as the request. The request layer uses a red-black tree to match up these
  * IDs. It is an error for a response message to be received that cannot
- * be matched with a request message.
+ * be matched with a request message. However, in the future such unsolicited
+ * messages may be supported.
  *
  * When the response message arrives, the callback specified in
  * the dsos_req_new call is called:
