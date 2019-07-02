@@ -1092,6 +1092,7 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
 	msg->op          = args_inp->op;
 	msg->iter_handle = args_inp->iter_handle;
+	msg->data_len    = 0;
 	msg->hdr2.obj_va = (uint64_t)obj_data;
 	msg->hdr2.obj_sz = obj_sz;
 
@@ -1162,6 +1163,7 @@ dsos_req_t *dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
 	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
 	msg->op          = args_inp->op;
 	msg->iter_handle = args_inp->iter_handle;
+	msg->data_len    = 0;
 	msg->hdr2.obj_va = (uint64_t)obj_data;
 	msg->hdr2.obj_sz = obj_sz;
 
