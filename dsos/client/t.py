@@ -33,9 +33,6 @@ class Test:
         self.doFind()
 
     def doCont(self):
-        print [dsos_cmd, "cont", "--delete", self.contnm]
-        check_call([dsos_cmd, "cont", "--delete", self.contnm],
-                   stderr=STDOUT)
         print [dsos_cmd, "cont", "--create", self.contnm, "755", "ROOT"]
         check_call([dsos_cmd, "cont", "--create", self.contnm, "755", "ROOT"],
                    stderr=STDOUT)
@@ -114,11 +111,17 @@ class Test:
             i += 1
         del recs
 
+    def doDeletes(self, attr_nm, num):
+        print [dsos_cmd, "delete", "--cont", self.contnm, "--schema", self.name, "--attr", attr_nm, "--num", str(num) ]
+        check_call([dsos_cmd, "delete", "--cont", self.contnm, "--schema", self.name, "--attr", attr_nm, "--num", str(num)],
+                   stderr=STDOUT)
+
 if __name__ == "__main__":
     try:
         if "DSOS_CONFIG" not in os.environ:
             raise Exception("must set $DSOS_CONFIG")
 
+        first = True
         for sz in range(16,9000):
             t = Test("test{}".format(sz), OrderedDict([ ("*seq","uint64"),
                                                         ("*int1","uint64"),
@@ -127,8 +130,15 @@ if __name__ == "__main__":
                                                         ("data","char[{}]".format(sz)) ]))
             t.numRecs(100)
             t.cont("/tmp/cont-py-%%.sos")
-            t.doCont()
-            t.doTest()
+            if first:
+                t.doCont()
+                first = False
+            t.doSchema()
+            t.doCsv()
+            t.doImport()
+            t.doIter()
+            t.doFind()
+            t.doDeletes("seq", 100)
             del t
 
     except CalledProcessError as e:

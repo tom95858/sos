@@ -79,16 +79,6 @@ dsos_t *dsos_container_open(const char *path, sos_perm_t perms)
 	return cont;
 }
 
-int dsos_container_delete(const char *path)
-{
-	rpc_container_delete_in_t	args_in;
-	rpc_container_delete_out_t	args_out;
-
-	strncpy(args_in.path, path, sizeof(args_in.path));
-
-	return dsos_rpc_container_delete(&args_in, &args_out);
-}
-
 int dsos_container_close(dsos_t *cont)
 {
 	int				ret;

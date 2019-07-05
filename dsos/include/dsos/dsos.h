@@ -19,7 +19,6 @@ struct dsos_ping_stats {
 
 int		dsos_container_close(dsos_t *dsos);
 dsos_t		*dsos_container_open(const char *path, sos_perm_t perms);
-int		dsos_container_delete(const char *path);
 int		dsos_container_new(const char *path, int mode);
 void		dsos_disconnect(void);
 int		*dsos_err_get(void);

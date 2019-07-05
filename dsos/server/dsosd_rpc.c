@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <assert.h>
 #include "dsosd_priv.h"
 
@@ -218,11 +219,12 @@ void rpc_handle_obj_delete(zap_ep_t ep, dsosd_msg_obj_delete_req_t *msg, size_t 
 /* Replace the first occurrence of %% with the server number. */
 static void rewrite_path(char *path)
 {
-	char	*p, server_num[4];
+	char	buf[4], *p;
 
-	if (p = strstr(path, "%%")) {
-		snprintf(server_num, sizeof(server_num), "%02d", g.opts.server_num);
-		strncpy(p, server_num, 2);
+	p = strstr(path, "%%");
+	if (p) {
+		snprintf(buf, sizeof(buf), "%02d", g.opts.server_num);
+		strncpy(p, buf, 2);
 	}
 }
 
@@ -263,32 +265,6 @@ void rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg,
 		    msg->path, msg->perms, cont, req->resp->u.container_open_resp.handle);
 
 	dsosd_req_complete(req, sizeof(dsosd_msg_container_open_resp_t));
-}
-
-/*
- * This command is dangerous in the sense that it does an rm -rf of a
- * path passed in as an RPC argument. This is used for testing and
- * probably should remain undocumented.
- */
-void rpc_handle_container_delete(zap_ep_t ep, dsosd_msg_container_delete_req_t *msg, size_t len)
-{
-	int			ret;
-	char			*cmd;
-	dsosd_client_t		*client = (dsosd_client_t *)zap_get_ucontext(ep);
-
-	rewrite_path(msg->path);
-
-	if (asprintf(&cmd, "/usr/bin/rm -rf '%s'", msg->path) < 0) {
-		ret = ENOMEM;
-	} else {
-		ret = system(cmd);
-		free(cmd);
-	}
-
-	dsosd_debug("ep %d msg %p len %d: '%s' ret %d\n", ep, msg, len, msg->path, ret);
-
-	dsosd_req_complete_with_status(client, DSOSD_MSG_CONTAINER_DELETE_RESP, msg->hdr.id,
-				       sizeof(dsosd_msg_container_delete_resp_t), ret);
 }
 
 void rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *msg, size_t len)

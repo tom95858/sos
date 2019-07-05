@@ -51,8 +51,6 @@ enum {
 	DSOSD_MSG_CONTAINER_NEW_RESP,
 	DSOSD_MSG_CONTAINER_OPEN_REQ,
 	DSOSD_MSG_CONTAINER_OPEN_RESP,
-	DSOSD_MSG_CONTAINER_DELETE_REQ,
-	DSOSD_MSG_CONTAINER_DELETE_RESP,
 	DSOSD_MSG_CONTAINER_CLOSE_REQ,
 	DSOSD_MSG_CONTAINER_CLOSE_RESP,
 	DSOSD_MSG_ITERATOR_CLOSE_REQ,
@@ -135,15 +133,6 @@ typedef struct dsosd_msg_container_open_resp {
 	dsosd_msg_hdr_t		hdr;
 	dsosd_handle_t		handle;
 } dsosd_msg_container_open_resp_t;
-
-typedef struct dsosd_msg_container_delete_req {
-	dsosd_msg_hdr_t		hdr;
-	char			path[DSOSD_MSG_MAX_PATH];
-} dsosd_msg_container_delete_req_t;
-
-typedef struct dsosd_msg_container_delete_resp {
-	dsosd_msg_hdr_t		hdr;
-} dsosd_msg_container_delete_resp_t;
 
 typedef struct dsosd_msg_container_close_req {
 	dsosd_msg_hdr_t		hdr;
@@ -307,8 +296,6 @@ typedef struct dsosd_msg {
 		dsosd_msg_container_close_resp_t	container_close_resp;
 		dsosd_msg_container_new_req_t		container_new_req;
 		dsosd_msg_container_new_resp_t		container_new_resp;
-		dsosd_msg_container_delete_req_t	container_delete_req;
-		dsosd_msg_container_delete_resp_t	container_delete_resp;
 		dsosd_msg_container_open_req_t		container_open_req;
 		dsosd_msg_container_open_resp_t		container_open_resp;
 		dsosd_msg_iterator_close_req_t		iterator_close_req;

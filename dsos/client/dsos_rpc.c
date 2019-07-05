@@ -227,40 +227,6 @@ int dsos_rpc_container_open(rpc_container_open_in_t  *args_inp,
 	return dsos_err_status();
 }
 
-int dsos_rpc_container_delete(rpc_container_delete_in_t  *args_inp,
-			      rpc_container_delete_out_t *args_outp)
-{
-	int					i, ret;
-	dsos_req_all_t				*req_all;
-	dsosd_msg_container_delete_req_t	*msg;
-	dsosd_msg_container_delete_resp_t	*resp;
-
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_container_delete_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type = DSOSD_MSG_CONTAINER_DELETE_REQ;
-		strncpy(msg->path, args_inp->path, sizeof(msg->path));
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_container_delete_req_t));
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
-
-	/* Copy out statuses. No data to copy out. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_container_delete_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
-
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
-}
-
 int dsos_rpc_container_close(rpc_container_close_in_t  *args_inp,
 			     rpc_container_close_out_t *args_outp)
 {

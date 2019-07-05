@@ -313,10 +313,6 @@ static const char *msg_type_to_str(int type)
 		return "DSOSD_CONTAINER_OPEN_REQ";
 	    case DSOSD_MSG_CONTAINER_OPEN_RESP:
 		return "DSOSD_CONTAINER_OPEN_RESP";
-	    case DSOSD_MSG_CONTAINER_DELETE_REQ:
-		return "DSOSD_CONTAINER_DELETE_REQ";
-	    case DSOSD_MSG_CONTAINER_DELETE_RESP:
-		return "DSOSD_CONTAINER_DELETE_RESP";
 	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
 		return "DSOSD_CONTAINER_CLOSE_REQ";
 	    case DSOSD_MSG_CONTAINER_CLOSE_RESP:
@@ -401,9 +397,6 @@ static void handle_msg(zap_ep_t ep, dsosd_msg_t *msg, size_t len)
 		break;
 	    case DSOSD_MSG_CONTAINER_OPEN_REQ:
 		rpc_handle_container_open(ep, (dsosd_msg_container_open_req_t *)msg, len);
-		break;
-	    case DSOSD_MSG_CONTAINER_DELETE_REQ:
-		rpc_handle_container_delete(ep, (dsosd_msg_container_delete_req_t *)msg, len);
 		break;
 	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
 		rpc_handle_container_close(ep, (dsosd_msg_container_close_req_t *)msg, len);

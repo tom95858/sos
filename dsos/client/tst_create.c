@@ -58,7 +58,7 @@ void usage(char *av[])
 int main(int ac, char *av[])
 {
 	int		c, i, ret;
-	int		delete_cont = 0, find = 0, iter = 0, loop = 0, create = 0, ping = 0, deletes = 0;
+	int		find = 0, iter = 0, loop = 0, create = 0, ping = 0, deletes = 0;
 	char		*config = NULL;
 
 	struct option	lopts[] = {
@@ -66,7 +66,6 @@ int main(int ac, char *av[])
 		{ "config",	required_argument, NULL, 'c' },
 		{ "cont",	required_argument, NULL, 'C' },
 		{ "create",     no_argument,       NULL, 'o' },
-		{ "delete",     no_argument,       NULL, 'D' },
 		{ "deletes",    no_argument,       NULL, 'G' },
 		{ "iter",       no_argument,       NULL, 'l' },
 		{ "local",      no_argument,       NULL, 'u' },
@@ -89,9 +88,6 @@ int main(int ac, char *av[])
 			break;
 		    case 'C':
 			cont_nm = strdup(optarg);
-			break;
-		    case 'D':
-			delete_cont = 1;
 			break;
 		    case 'L':
 			loop = 1;
@@ -176,36 +172,15 @@ int main(int ac, char *av[])
 
 	if (create && loop) {
 		int i = 1;
+		do_init();
 		while (1) {
 			printf("================== iteration %d ===================\n", i++);
-			fflush(stdout);
-			ret = dsos_container_delete(cont_nm);
-			if (ret) {
-				fprintf(stderr, "could not delete container %s\n", cont_nm);
-				exit(1);
-			}
-			if (verbose)
-				printf("container %s deleted\n", cont_nm);
-			do_init();
 			do_obj_creates();
-			ret = dsos_container_close(cont);
-			if (ret) {
-				fprintf(stderr, "could not close container %s\n", cont_nm);
-				exit(1);
-			}
-			if (verbose)
-				printf("container %s closed\n", cont_nm);
+			do_obj_deletes();
 		}
 		/*NOTREACHED*/
 	}
 
-	if (delete_cont) {
-		ret = dsos_container_delete(cont_nm);
-		if (ret) {
-			fprintf(stderr, "could not delete container %s\n", cont_nm);
-			exit(1);
-		}
-	}
 	do_init();
 
 	if (create)
@@ -554,13 +529,6 @@ void do_obj_deletes()
 		}
 	}
 	print_elapsed(50000, num_iters, beg, last);
-	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
-		sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
-		sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
-		sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
-		printf("OBJ REMAINING: obj %s %s %s\n", buf1, mydata, buf2);
-		sos_obj_put(sos_obj);
-	}
 	dsos_iter_close(iter);
 }
 

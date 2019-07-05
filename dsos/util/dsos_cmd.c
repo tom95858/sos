@@ -21,6 +21,7 @@ int			do_import(int ac, char *av[]);
 int			do_iter(int ac, char *av[]);
 int			do_find(int ac, char *av[]);
 int			do_ping(int ac, char *av[]);
+int			do_delete(int ac, char *av[]);
 void			dump_obj(sos_obj_t sos_obj);
 void			dump_schema(sos_schema_t sos_schema);
 sos_schema_template_t	parse_schema_template(const char *schema_nm, char *template);
@@ -34,6 +35,7 @@ void usage(void)
 	fprintf(stderr, "  import    import CSV data\n");
 	fprintf(stderr, "  find      find an object given a key\n");
 	fprintf(stderr, "  iter      iterate through a schema/attr\n");
+	fprintf(stderr, "  delete    iterate and delete objects\n");
 	fprintf(stderr, "  ping      ping one or more servers\n");
 }
 
@@ -63,6 +65,7 @@ int main(int ac, char *av[])
 	else if (!strcmp(av[1], "schema")) ret = do_schema(ac-1, av+1);
 	else if (!strcmp(av[1], "find"))   ret = do_find  (ac-1, av+1);
 	else if (!strcmp(av[1], "iter"))   ret = do_iter  (ac-1, av+1);
+	else if (!strcmp(av[1], "delete")) ret = do_delete(ac-1, av+1);
 	else if (!strcmp(av[1], "import")) ret = do_import(ac-1, av+1);
 	else if (!strcmp(av[1], "ping"))   ret = do_ping  (ac-1, av+1);
 	else {
@@ -86,14 +89,12 @@ int do_cont(int ac, char *av[])
 
 	struct option	lopts[] = {
 		{ "create",	no_argument,       NULL, 'c' },
-		{ "delete",	no_argument,       NULL, 'd' },
 		{ 0,		0,		   0,     0  }
 	};
 
 	while ((c = getopt_long_only(ac, av, "cm", lopts, NULL)) != -1) {
 		switch (c) {
 		    case 'c': op = CREATE; break;
-		    case 'd': op = DELETE; break;
 		    default:
 usage:
 			usage();
@@ -154,16 +155,6 @@ usage:
 			return ret;
 		}
 		dsos_container_close(cont);
-	} else if (op == DELETE) {
-		if ((ac - optind) != 1) {
-			usage();
-			goto usage;
-		}
-		ret = dsos_container_delete(av[optind]);
-		if (ret) {
-			fprintf(stderr, "error %d deleting container\n", ret);
-			return ret;
-		}
 	}
 
 	return 0;
@@ -437,6 +428,81 @@ int do_iter(int ac, char *av[])
 		dump_obj(sos_obj);
 		sos_obj_put(sos_obj);
 	}
+
+	dsos_iter_close(iter);
+	dsos_container_close(cont);
+
+	return 0;
+}
+
+/*
+ * dsos_cmd delete --cont /tmp/cont.sos --schema test --attr seq --num 1000
+ */
+int do_delete(int ac, char *av[])
+{
+	int		c, i, first, len, num = -1;
+	char		*attr_nm = NULL, *cont_nm = NULL, *schema_nm = NULL;
+	sos_obj_t	sos_obj;
+	sos_attr_t	attr;
+	dsos_t		*cont;
+	dsos_schema_t	*schema;
+	dsos_iter_t	*iter;
+
+	struct option	lopts[] = {
+		{ "attr",	required_argument, NULL, 'a' },
+		{ "cont",	required_argument, NULL, 'c' },
+		{ "schema",	required_argument, NULL, 's' },
+		{ "num",	required_argument, NULL, 'n' },
+		{ 0,		0,		   0,     0  }
+	};
+
+	while ((c = getopt_long_only(ac, av, "c:s:", lopts, NULL)) != -1) {
+		switch (c) {
+		    case 'a': attr_nm   = strdup(optarg); break;
+		    case 'c': cont_nm   = strdup(optarg); break;
+		    case 'n': num       = atoi(optarg); break;
+		    case 's': schema_nm = strdup(optarg); break;
+		    default:
+			usage();
+			fprintf(stderr, "options:\n");
+			fprintf(stderr, "  --attr <name>      Attribute name\n");
+			fprintf(stderr, "  --cont <path>      Container path\n");
+			fprintf(stderr, "  --schema <name>    Schema name\n");
+			fprintf(stderr, "  --num <numobjs>    Number of objects to delete (default is all)\n");
+			return 1;
+		}
+	}
+	if (!attr_nm || !cont_nm || !schema_nm) {
+		fprintf(stderr, "must specify --attr, --cont, and --schema\n");
+		return 1;
+	}
+
+	cont = dsos_container_open(cont_nm, 0755);
+	if (!cont) {
+		fprintf(stderr, "could not open container\n");
+		return 1;
+	}
+	schema = dsos_schema_by_name(cont, schema_nm);
+	if (!schema) {
+		fprintf(stderr, "could not open schema '%s'\n", schema_nm);
+		return 1;
+	}
+	if (attr_nm[0] == '#')
+		attr = sos_schema_attr_by_id(schema->sos_schema, atoi(attr_nm+1));
+	else
+		attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
+	if (!attr) {
+		fprintf(stderr, "could not find attribute '%s'\n", attr_nm);
+		return 1;
+	}
+	iter = dsos_iter_new(schema, attr);
+	if (!iter) {
+		printf("could not create iter\n");
+		return 1;
+	}
+
+	for (i = 0; (i < num) && (sos_obj = dsos_iter_begin(iter)); ++i)
+		dsos_obj_delete(sos_obj);
 
 	dsos_iter_close(iter);
 	dsos_container_close(cont);
