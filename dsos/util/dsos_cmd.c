@@ -51,10 +51,7 @@ int main(int ac, char *av[])
 	if (config) {
 		ret = dsos_init(config);
 		if (ret) {
-			fprintf(stderr, "could not connect to all DSOS servers\nstatus:");
-			for (i = 0; i < g.num_servers; ++i)
-				fprintf(stderr, " %d", dsos_err_get()[i]);
-			fprintf(stderr, "\n");
+			dsos_perror("could not connect to all DSOS servers\n");
 			return ret;
 		}
 	} else {
@@ -119,39 +116,27 @@ usage:
 		}
 		ret = dsos_container_new(av[optind], mode);
 		if (ret) {
-			fprintf(stderr, "error creating container: ");
-			for (i = 0; i < g.num_servers; ++i)
-				fprintf(stderr, "%d ", dsos_err_get()[i]);
-			fprintf(stderr, "\n");
+			dsos_perror("error creating container '%s'\n", av[optind]);
 			return ret;
 		}
 		cont = dsos_container_open(av[optind], mode);
 		if (!cont) {
-			fprintf(stderr, "could not open container\n");
+			dsos_perror("error opening container '%s'\n", av[optind]);
 			return 1;
 		}
 		ret = dsos_part_create(cont, av[optind+2], NULL);
 		if (ret) {
-			fprintf(stderr, "could not create partition: ");
-			for (i = 0; i < g.num_servers; ++i)
-				fprintf(stderr, "%d ", dsos_err_get()[i]);
-			fprintf(stderr, "\n");
+			dsos_perror("error creating partition '%s'\n", av[optind+2]);
 			return ret;
 		}
 		part = dsos_part_find(cont, av[optind+2]);
 		if (!part) {
-			fprintf(stderr, "could not find partition: ");
-			for (i = 0; i < g.num_servers; ++i)
-				fprintf(stderr, "%d ", dsos_err_get()[i]);
-			fprintf(stderr, "\n");
+			dsos_perror("error finding partition '%s'\n", av[optind+2]);
 			return 1;
 		}
 		ret = dsos_part_state_set(part, SOS_PART_STATE_PRIMARY);
 		if (ret) {
-			fprintf(stderr, "could not set partition state: ");
-			for (i = 0; i < g.num_servers; ++i)
-				fprintf(stderr, "%d ", dsos_err_get()[i]);
-			fprintf(stderr, "\n");
+			dsos_perror("error setting partition state\n");
 			return ret;
 		}
 		dsos_container_close(cont);
@@ -224,23 +209,20 @@ usage:
 			return 1;
 		schema = dsos_schema_from_template(sos_templ);
 		if (!schema) {
-			fprintf(stderr, "could not create schema '%s'\n", schema_nm);
+                       dsos_perror("could not create schema '%s'\n", schema_nm);
 			return 1;
 		}
 		free(sos_templ);
 		ret = dsos_schema_add(cont, schema);
 		if (ret) {
-			fprintf(stderr, "could not add schema '%s': ", schema_nm);
-			for (i = 0; i < g.num_servers; ++i)
-				fprintf(stderr, "%d ", dsos_err_get()[i]);
-			fprintf(stderr, "\n");
+                       dsos_perror("could not create schema '%s'\n", schema_nm);
 			return 1;
 		}
 		break;
 	    case DUMP:
 		schema = dsos_schema_by_name(cont, schema_nm);
 		if (!schema) {
-			fprintf(stderr, "could not open schema '%s'\n", schema_nm);
+                       dsos_perror("could not open schema '%s'\n", schema_nm);
 			return 1;
 		}
 		dump_schema(schema->sos_schema);
@@ -660,7 +642,7 @@ int do_ping(int ac, char *av[])
 		if (server_num == -1) {
 			ret = dsos_ping_all(&statsp, dump);
 		} else {
-			ret = dsos_ping(server_num, &stats);
+			ret = dsos_ping_one(server_num, &stats);
 			statsp = &stats;
 		}
 		if (ret) {

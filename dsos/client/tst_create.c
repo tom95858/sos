@@ -153,10 +153,7 @@ int main(int ac, char *av[])
 
 	ret = dsos_init(config);
 	if (ret) {
-		fprintf(stderr, "err %d connecting to DSOS servers:\n", ret);
-		for (i = 0; i < g.num_servers; ++i)
-			fprintf(stderr, "%d ", dsos_err_get()[i]);
-		fprintf(stderr, "\n");
+		dsos_perror("err connecting to DSOS servers\n");
 		return 1;
 	}
 
@@ -207,7 +204,7 @@ void do_ping()
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
-		ret = dsos_ping(server_num, &stats);
+		ret = dsos_ping_one(server_num, &stats);
 		if (ret) {
 			printf("error %d\n", ret);
 			fflush(stdout);
@@ -294,58 +291,43 @@ dsos_t *create_cont(char *path, int perms)
 
 	ret = dsos_container_new(path, perms);
 	if (ret) {
-		fprintf(stderr, "could not create container: ");
-		for (i = 0; i < g.num_servers; ++i)
-			fprintf(stderr, "%d ", dsos_err_get()[i]);
-		fprintf(stderr, "\n");
+		dsos_perror("coult not create container\n");
 		exit(1);
 	}
 
 	cont = dsos_container_open(path, perms);
 	if (!cont) {
-		fprintf(stderr, "could not open container\n");
+		dsos_perror("coult not open container\n");
 		exit(1);
 	}
 
 	ret = dsos_part_create(cont, "ROOT", NULL);
 	if (ret) {
-		fprintf(stderr, "could not create partition: ");
-		for (i = 0; i < g.num_servers; ++i)
-			fprintf(stderr, "%d ", dsos_err_get()[i]);
-		fprintf(stderr, "\n");
+		dsos_perror("coult not create partition\n");
 		exit(1);
 	}
 
 	part = dsos_part_find(cont, "ROOT");
 	if (!part) {
-		fprintf(stderr, "could not find partition: ");
-		for (i = 0; i < g.num_servers; ++i)
-			fprintf(stderr, "%d ", dsos_err_get()[i]);
-		fprintf(stderr, "\n");
+		dsos_perror("coult not find partition\n");
 		exit(1);
 	}
 
 	ret = dsos_part_state_set(part, SOS_PART_STATE_PRIMARY);
 	if (ret) {
-		fprintf(stderr, "could not set partition state: ");
-		for (i = 0; i < g.num_servers; ++i)
-			fprintf(stderr, "%d ", dsos_err_get()[i]);
-		fprintf(stderr, "\n");
+		dsos_perror("coult not set partition state\n");
 		exit(1);
 	}
 
 	schema = dsos_schema_from_template(&schema_template);
 	if (!schema) {
-		fprintf(stderr, "could not create schema 'test'\n");
+		dsos_perror("coult not create schema 'test'\n");
 		exit(1);
 	}
 
 	ret = dsos_schema_add(cont, schema);
 	if (ret) {
-		fprintf(stderr, "could not add schema 'test': ");
-		for (i = 0; i < g.num_servers; ++i)
-			fprintf(stderr, "%d ", dsos_err_get()[i]);
-		fprintf(stderr, "\n");
+		dsos_perror("coult not add schema 'test'\n");
 		exit(1);
 	}
 

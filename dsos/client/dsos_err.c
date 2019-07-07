@@ -1,42 +1,124 @@
-#include "dsos_priv.h"
-
 /*
- * This allocates a vector with the last status of each DSOS
- * server from the most recent operation.
+ * A dsos_err_t encapsulates two status vectors, one for local status
+ * and one for remote. Local status comes from immediate failures of
+ * operations like zap_send. Remote status comes via server response
+ * messages and is stored in the response-message header. This API
+ * helps to collect both statuses during a DSOS API.
+ *
+ * The thread-local global variable dsos_errno is used much like
+ * libc's errno. Because it is thread-local storage, care must be
+ * taken to set it on the proper thread. To aid with this, DSOS
+ * requests contain a dsos_err_t which is used to collect status
+ * for that request and is copied to dsos_errno just before the
+ * DSOS API returns to the caller (see dsos_req.c).
+ *
+ * Since dsos_errno contains two vectors, call dsos_err_status()
+ * to determine whether there is a local or remote error (non-0 status).
+ * This call returns the bits DSOS_ERR_LOCAL and/or DSOS_ERR_REMOTE.
  */
 
-static __thread int	*statuses = NULL;
+#include "dsos_priv.h"
 
-static inline void err_alloc(void)
+dsos_err_t dsos_err_new(void)
 {
-	if (!statuses)
-		statuses = (int *)malloc(g.num_servers * sizeof(int));
-	if (!statuses)
+	int		*p;
+	dsos_err_t	err;
+
+	p = (int *)malloc(g.num_servers * 2 * sizeof(int));
+	if (!p)
 		dsos_fatal("out of memory\n");
+	err.local  = p;
+	err.remote = p + g.num_servers;
+	dsos_err_clear(err);
+	return err;
 }
 
-void dsos_err_clear(void)
+void dsos_err_clear(dsos_err_t err)
 {
-	err_alloc();
-	bzero(statuses, g.num_servers * sizeof(int));
+	bzero(err.local, g.num_servers * 2 * sizeof(int));
 }
 
-void dsos_err_set(int server_id, int status)
+int dsos_err_set(dsos_err_t to, dsos_err_t from)
 {
-	err_alloc();
-	statuses[server_id] = status;
+	dsos_err_free(to);
+	to = from;
+	return dsos_err_status(to);
 }
 
-int *dsos_err_get(void)
+void dsos_err_set_local(dsos_err_t err, int server_num, int status)
 {
-	return statuses;
+	err.local[server_num] = status;
 }
 
-int dsos_err_status(void)
+void dsos_err_set_remote(dsos_err_t err, int server_num, int status)
+{
+	err.remote[server_num] = status;
+}
+
+void dsos_err_set_local_all(dsos_err_t err, int status)
+{
+	int	i;
+
+	for (i = 0; i < g.num_servers; ++i)
+		dsos_err_set_local(err, i, status);
+}
+
+int dsos_err_get_local(dsos_err_t err, int server_num)
+{
+	if (err.local)
+		return err.local[server_num];
+	return -1;
+}
+
+int dsos_err_get_remote(dsos_err_t err, int server_num)
+{
+	if (err.remote)
+		return err.remote[server_num];
+	return -1;
+}
+
+int dsos_err_status(dsos_err_t err)
 {
 	int	i, ret = 0;
 
+	for (i = 0; i < g.num_servers; ++i) {
+		if (err.local[i])
+			ret |= DSOS_ERR_LOCAL;
+		if (err.remote[i])
+			ret |= DSOS_ERR_REMOTE;
+	}
+	return ret;
+}
+
+void dsos_err_free(dsos_err_t err)
+{
+	if (err.local)
+		free(err.local);
+	err.local = err.remote = NULL;
+}
+
+void dsos_perror(const char *fmt, ...)
+{
+	int	i;
+	va_list	ap;
+
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+
+	printf("server  ");
 	for (i = 0; i < g.num_servers; ++i)
-		ret |= statuses[i];
-	return ret!=0;
+		printf("%2d ", i);
+	printf("\n");
+
+	printf("local:  ");
+	for (i = 0; i < g.num_servers; ++i)
+		printf("%02d ", dsos_err_get_local(dsos_errno, i));
+	printf("\n");
+
+	printf("remote: ");
+	for (i = 0; i < g.num_servers; ++i)
+		printf("%02d ", dsos_err_get_remote(dsos_errno, i));
+	printf("\n");
+
+	fflush(stdout);
 }

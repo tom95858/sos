@@ -2,8 +2,7 @@
  * A DSOS RPC has the following attributes:
  *
  * 1. It contacts
- *    a. all servers,
- *    b. a subset of servers, or
+ *    a. all servers, or
  *    c. one server;
  *
  * 2. It is
@@ -14,84 +13,54 @@
  *    rpc_<rpcName>_out_t structures and returns an int status.
  *
  * The RPC layer's job is to marshall the input parameters into one or
- * more request messages to be sent to one or more servers, send the
- * request, and either wait for the response or return after saving the
- * request information in the message-send context(to be retrieved
- * when the response message from the server arrives).
+ * more request messages to be sent to one or all servers, send the
+ * request(s), and either wait for the response(s) or return immediately.
  *
  * The request is sent using the dsos_req_* API which supports sending
- * to one server, a subset of servers, or all servers.
- *
- * Synchronous RPCs are implemented by waiting on a semaphore after
- * the request message is submitted to the dsos_req_t layer via one of
- * the dsos_req_submit APIs. The request is submitted along with a
- * callback function which is called when the response message arrives
- * from the server. Request and response are matched up using a unique
- * 64-bit request identifier managed by the dsos_req_t layer. For
- * requests to multiple servers, the callback is called upon receiving
- * the response from the last server. The callback signals the
- * semaphore. Note that the callback also must copy out any output
- * parameters while the response message buffer is valid.  After the
- * callback returns, the message is returned to Zap ownership and no
- * longer is accessible.
- *
- * Asynchronous RPCs return immediately after the request is submitted.
- * A callback function, specified when the request was submitted, is
- * called when the response message arrives.  The callback can inspect
- * the response and act accordingly.
+ * to one server or to all servers.
  */
 
 #include <string.h>
 #include "dsos_priv.h"
 
-static void rpc_all_signal_cb(dsos_req_all_t *req_all, void *ctxt)
+static void rpc_set_status_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			      int server_num, void *ctxt)
 {
-	dsos_debug("req_all %p signaling\n", req_all);
-	sem_post(&req_all->sem);
+	dsos_debug("req %p server %d resp %p/%d id %ld status %d\n", req, server_num,
+		   resp->msg, resp->len, resp->msg->u.hdr.id, resp->msg->u.hdr.status);
+
+	dsos_err_set_remote(req->status, server_num, resp->msg->u.hdr.status);
 }
 
-static void rpc_signal_cb(dsos_req_t *req, size_t len, void *ctxt)
-{
-	dsos_debug("req %p signaling\n", req);
-	sem_post(&req->sem);
-}
-
-static void rpc_ping_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void rpc_ping_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			int server_num, void *ctxt)
 {
 	rpc_ping_out_t	*args_outp = ctxt;
 
-	args_outp->tot_num_connects    = req->resp->u.ping_resp.tot_num_connects;
-	args_outp->tot_num_disconnects = req->resp->u.ping_resp.tot_num_disconnects;
-	args_outp->tot_num_reqs        = req->resp->u.ping_resp.tot_num_reqs;
-	args_outp->num_clients         = req->resp->u.ping_resp.num_clients;
+	args_outp->stats->tot_num_connects    = resp->msg->u.ping_resp.tot_num_connects;
+	args_outp->stats->tot_num_disconnects = resp->msg->u.ping_resp.tot_num_disconnects;
+	args_outp->stats->tot_num_reqs        = resp->msg->u.ping_resp.tot_num_reqs;
+	args_outp->stats->num_clients         = resp->msg->u.ping_resp.num_clients;
 
-	sem_post(&req->sem);
+	dsos_err_set_remote(req->status, server_num, resp->msg->u.hdr.status);
 }
 
-int dsos_rpc_ping(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
+int dsos_rpc_ping_one(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
 {
-	int			ret;
-	dsos_req_t		*req;
-	dsosd_msg_ping_req_t	*msg;
-	dsosd_msg_ping_resp_t	*resp;
+	dsos_req_t	*req;
 
-	req = dsos_req_new(rpc_ping_cb, args_outp);
-	if (!req)
-		return ENOMEM;
+	args_outp->stats = args_inp->stats;
 
-	req->msg->u.hdr.type = DSOSD_MSG_PING_REQ;
+	req = dsos_req_new(DSOS_REQ_ONE, rpc_ping_cb, args_outp);
 
-	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_ping_req_t));
-	if (ret) {
-		dsos_error("ret %d\n", ret);
-		return ret;
-	}
+	req->buf->send.msg->u.hdr.type = DSOSD_MSG_PING_REQ;
+	req->buf->send.len = sizeof(dsosd_msg_ping_req_t);
 
-	sem_wait(&req->sem);
+	dsos_req_set_server(req, args_inp->server_num);
 
-	dsos_req_put(req);
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB, req);
 
-	return 0;
+	return dsos_err_status(dsos_errno);
 }
 
 static uint64_t nsecs_now()
@@ -102,405 +71,343 @@ static uint64_t nsecs_now()
 	return ts.tv_sec * 1.0e+9 + ts.tv_nsec;
 }
 
-static void rpc_ping_all_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void rpc_ping_all_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			    int server_num, void *ctxt)
 {
-	dsosd_msg_ping_resp_t	*resp = (dsosd_msg_ping_resp_t *)req->resp;
-	rpc_ping_out_t		*args_outp = (rpc_ping_out_t *)ctxt;
-	int			server_num = req->conn->server_id;
+	dsosd_msg_ping_resp_t	*msg = (dsosd_msg_ping_resp_t *)resp->msg;
+	rpc_ping_out_t		*args_outp = ctxt;
 
-	args_outp[server_num].tot_num_connects    = resp->tot_num_connects;
-	args_outp[server_num].tot_num_disconnects = resp->tot_num_disconnects;
-	args_outp[server_num].tot_num_reqs        = resp->tot_num_reqs;
-	args_outp[server_num].num_clients         = resp->num_clients;
-	args_outp[server_num].nsecs               = nsecs_now() - args_outp[server_num].nsecs;
+	args_outp->stats[server_num].tot_num_connects    = msg->tot_num_connects;
+	args_outp->stats[server_num].tot_num_disconnects = msg->tot_num_disconnects;
+	args_outp->stats[server_num].tot_num_reqs        = msg->tot_num_reqs;
+	args_outp->stats[server_num].num_clients         = msg->num_clients;
+	args_outp->stats[server_num].nsecs               = nsecs_now() - args_outp->stats[server_num].nsecs;
 
-	dsos_err_set(server_num, resp->hdr.status);
-
-	if (!ods_atomic_dec(&req->req_all->num_reqs_pend))
-		sem_post(&req->req_all->sem);
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
-int dsos_rpc_ping_all(rpc_ping_in_t *args_inp, rpc_ping_out_t **args_outpp)
+int dsos_rpc_ping_all(rpc_ping_in_t *args_inp, rpc_ping_out_t *args_outp)
 {
-	int			i, ret;
-	uint64_t		now;
-	dsos_req_all_t		*req_all;
+	int		i;
+	uint64_t	now;
+	dsos_req_t	*req;
 
-	*args_outpp = (rpc_ping_out_t *)malloc(sizeof(rpc_ping_out_t) * g.num_servers);
-	if (!args_outpp)
+	args_outp->stats = (struct dsos_ping_stats *)malloc(sizeof(struct dsos_ping_stats) * g.num_servers);
+	if (!args_outp->stats)
 		dsos_fatal("out of memory\n");
-	dsos_err_clear();
 
-	req_all = dsos_req_all_async_new(rpc_ping_all_cb, *args_outpp);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_ping_all_cb, args_outp);
 
 	/* Copy in args to the request messages. */
 	now = nsecs_now();
 	for (i = 0; i < g.num_servers; ++i) {
-		req_all->reqs[i]->msg->u.hdr.type       = DSOSD_MSG_PING_REQ;
-		req_all->reqs[i]->msg->u.ping_req.debug = args_inp->debug;
-		(*args_outpp)[i].nsecs = now;
+		req->bufs[i].send.msg->u.hdr.type       = DSOSD_MSG_PING_REQ;
+		req->bufs[i].send.msg->u.ping_req.debug = args_inp->debug;
+		req->bufs[i].send.len                   = sizeof(dsosd_msg_ping_req_t);
+		args_outp->stats[i].nsecs = now;
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_ping_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
-	dsos_req_all_put(req_all);
-
-	return dsos_err_status();
+	return dsos_err_status(dsos_errno);
 }
 
 int dsos_rpc_container_new(rpc_container_new_in_t  *args_inp,
 			   rpc_container_new_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_container_new_req_t	*msg;
 	dsosd_msg_container_new_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_set_status_cb, NULL);
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_container_new_req_t *)req_all->reqs[i]->msg;
+		msg = (dsosd_msg_container_new_req_t *)req->bufs[i].send.msg;
 		msg->hdr.type = DSOSD_MSG_CONTAINER_NEW_REQ;
 		strncpy(msg->path, args_inp->path, sizeof(msg->path));
 		msg->mode = args_inp->mode;
+		req->bufs[i].send.len = sizeof(dsosd_msg_container_new_req_t);
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_container_new_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
+	return dsos_err_status(dsos_errno);
+}
 
-	/* Copy out statuses. No data to copy out. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_container_new_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
+static void rpc_container_open_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+				  int server_num, void *ctxt)
+{
+	dsosd_msg_container_open_resp_t	*msg = (dsosd_msg_container_open_resp_t *)resp->msg;
+	rpc_container_open_out_t	*args_outp = (rpc_container_open_out_t *)ctxt;
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_debug("req %p server %d resp %p/%d id %ld status %d handle %p\n", req,
+		   server_num, resp->msg, resp->len, msg->hdr.id, msg->hdr.status, msg->handle);
+
+	args_outp->handles[server_num] = msg->handle;
+
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
 int dsos_rpc_container_open(rpc_container_open_in_t  *args_inp,
 			    rpc_container_open_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_container_open_req_t	*msg;
-	dsosd_msg_container_open_resp_t	*resp;
+	dsos_buf_t			*buf;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_container_open_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type = DSOSD_MSG_CONTAINER_OPEN_REQ;
-		strncpy(msg->path, args_inp->path, sizeof(msg->path));
-		msg->perms = args_inp->perms;
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_container_open_req_t));
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
-
-	/* Copy out results from the responses. Caller must free. */
+	/* Allocate space for the output parms, filled in by the callback. Caller must free. */
 	args_outp->handles = (dsosd_handle_t *)malloc(sizeof(dsosd_handle_t) * g.num_servers);
 	if (!args_outp->handles)
 		dsos_fatal("out of memory\n");
-	dsos_err_clear();
+
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_container_open_cb, args_outp);
+
+	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_container_open_resp_t *)req_all->reqs[i]->resp;
-		args_outp->handles[i] = resp->handle;
-		dsos_err_set(i, resp->hdr.status);
-		dsos_debug("server %d req %p resp %p handle %p status %d\n",
-			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
+		msg = (dsosd_msg_container_open_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type = DSOSD_MSG_CONTAINER_OPEN_REQ;
+		msg->perms    = args_inp->perms;
+		strncpy(msg->path, args_inp->path, sizeof(msg->path));
+		req->bufs[i].send.len = sizeof(dsosd_msg_container_open_req_t);
 	}
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
+
+	return dsos_err_status(dsos_errno);
 }
 
 int dsos_rpc_container_close(rpc_container_close_in_t  *args_inp,
 			     rpc_container_close_out_t *args_outp)
 {
-	int					i, ret;
-	dsos_req_all_t				*req_all;
-	dsosd_msg_container_close_req_t		*msg;
-	dsosd_msg_container_close_resp_t	*resp;
+	int				i;
+	dsos_req_t			*req;
+	dsosd_msg_container_close_req_t	*msg;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_set_status_cb, NULL);
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_container_close_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type = DSOSD_MSG_CONTAINER_CLOSE_REQ;
-		msg->handle   = args_inp->handles[i];
+		msg = (dsosd_msg_container_close_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type         = DSOSD_MSG_CONTAINER_CLOSE_REQ;
+		msg->handle           = args_inp->handles[i];
+		req->bufs[i].send.len = sizeof(dsosd_msg_container_close_req_t);
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_container_close_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
+	return dsos_err_status(dsos_errno);
+}
 
-	/* Copy out statuses. No data to copy out. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_container_close_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
+static void rpc_schema_by_name_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+				  int server_num, void *ctxt)
+{
+	dsosd_msg_schema_by_name_resp_t	*msg = (dsosd_msg_schema_by_name_resp_t *)resp->msg;
+	rpc_schema_by_name_out_t	*args_outp = (rpc_schema_by_name_out_t *)ctxt;
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_debug("req %p server %d resp %p/%d id %ld status %d handle %p\n", req,
+		   server_num, resp->msg, resp->len, msg->hdr.id, msg->hdr.status, msg->handle);
+
+	args_outp->handles[server_num] = msg->handle;
+	memcpy(args_outp->templ, msg->templ, sizeof(args_outp->templ));
+
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
 int dsos_rpc_schema_by_name(rpc_schema_by_name_in_t  *args_inp,
 			    rpc_schema_by_name_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_schema_by_name_req_t	*msg;
-	dsosd_msg_schema_by_name_resp_t	*resp;
-
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_schema_by_name_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type    = DSOSD_MSG_SCHEMA_BY_NAME_REQ;
-		msg->cont_handle = args_inp->cont_handles[i];
-		strncpy(msg->name, args_inp->name, sizeof(msg->name));
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_schema_by_name_req_t));
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
 
 	/* Copy out results from the responses. Caller must free. */
 	args_outp->handles = (dsosd_handle_t *)malloc(sizeof(dsosd_handle_t) * g.num_servers);
 	if (!args_outp->handles)
 		dsos_fatal("out of memory\n");
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_schema_by_name_resp_t *)req_all->reqs[i]->resp;
-		args_outp->handles[i] = resp->handle;
-		dsos_err_set(i, resp->hdr.status);
-		dsos_debug("server %d req %p resp %p handle %p status %d\n",
-			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
-	}
-	memcpy(args_outp->templ, resp->templ, sizeof(args_outp->templ));
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_schema_by_name_cb, args_outp);
+
+	/* Copy in args to the request messages. */
+	for (i = 0; i < g.num_servers; ++i) {
+		msg = (dsosd_msg_schema_by_name_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type    = DSOSD_MSG_SCHEMA_BY_NAME_REQ;
+		msg->cont_handle = args_inp->cont_handles[i];
+		strncpy(msg->name, args_inp->name, sizeof(msg->name));
+		req->bufs[i].send.len = sizeof(dsosd_msg_schema_by_name_req_t);
+	}
+
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
+
+	return dsos_err_status(dsos_errno);
+}
+
+static void rpc_schema_from_template_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+					int server_num, void *ctxt)
+{
+	dsosd_msg_schema_from_template_resp_t	*msg = (dsosd_msg_schema_from_template_resp_t *)resp->msg;
+	rpc_schema_from_template_out_t	*args_outp = (rpc_schema_from_template_out_t *)ctxt;
+
+	dsos_debug("req %p server %d resp %p/%d id %ld status %d handle %p\n", req,
+		   server_num, resp->msg, resp->len, msg->hdr.id, msg->hdr.status, msg->handle);
+
+	args_outp->handles[server_num] = msg->handle;
+
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
 int dsos_rpc_schema_from_template(rpc_schema_from_template_in_t  *args_inp,
 				  rpc_schema_from_template_out_t *args_outp)
 {
-	int					i, ret;
-	dsos_req_all_t				*req_all;
+	int					i;
+	dsos_req_t				*req;
 	dsosd_msg_schema_from_template_req_t	*msg;
-	dsosd_msg_schema_from_template_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_schema_from_template_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type = DSOSD_MSG_SCHEMA_FROM_TEMPLATE_REQ;
-		memcpy(msg->templ, args_inp->templ, args_inp->len);
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_schema_from_template_req_t));
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
-
-	/* Copy out results from the responses. Caller must free. */
 	args_outp->handles = (dsosd_handle_t *)malloc(sizeof(dsosd_handle_t) * g.num_servers);
 	if (!args_outp->handles)
 		dsos_fatal("out of memory\n");
-	dsos_err_clear();
+
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_schema_from_template_cb, args_outp);
+
+	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_schema_from_template_resp_t *)req_all->reqs[i]->resp;
-		args_outp->handles[i] = resp->handle;
-		dsos_err_set(i, resp->hdr.status);
-		dsos_debug("server %d req %p resp %p handle %p status %d\n",
-			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
+		msg = (dsosd_msg_schema_from_template_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type = DSOSD_MSG_SCHEMA_FROM_TEMPLATE_REQ;
+		memcpy(msg->templ, args_inp->templ, args_inp->len);
+		req->bufs[i].send.len = sizeof(dsosd_msg_schema_from_template_req_t);
 	}
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
+
+	return dsos_err_status(dsos_errno);
 }
 
 int dsos_rpc_schema_add(rpc_schema_add_in_t  *args_inp,
 			rpc_schema_add_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_schema_add_req_t	*msg;
-	dsosd_msg_schema_add_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_set_status_cb, NULL);
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_schema_add_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type      = DSOSD_MSG_SCHEMA_ADD_REQ;
-		msg->cont_handle   = args_inp->cont_handles[i];
-		msg->schema_handle = args_inp->schema_handles[i];
+		msg = (dsosd_msg_schema_add_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type         = DSOSD_MSG_SCHEMA_ADD_REQ;
+		msg->cont_handle      = args_inp->cont_handles[i];
+		msg->schema_handle    = args_inp->schema_handles[i];
+		req->bufs[i].send.len = sizeof(dsosd_msg_schema_add_req_t);
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_schema_add_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
-
-	/* Copy out statuses. No data to copy out. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_schema_add_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
-
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	return dsos_err_status(dsos_errno);
 }
 
 int dsos_rpc_part_create(rpc_part_create_in_t  *args_inp,
 			 rpc_part_create_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_part_create_req_t	*msg;
-	dsosd_msg_part_create_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_set_status_cb, NULL);
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_part_create_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type      = DSOSD_MSG_PART_CREATE_REQ;
-		msg->cont_handle   = args_inp->cont_handles[i];
+		msg = (dsosd_msg_part_create_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type    = DSOSD_MSG_PART_CREATE_REQ;
+		msg->cont_handle = args_inp->cont_handles[i];
 		strncpy(msg->name, args_inp->name, sizeof(msg->name));
 		strncpy(msg->path, args_inp->path, sizeof(msg->path));
+		req->bufs[i].send.len = sizeof(dsosd_msg_part_create_req_t);
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_part_create_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
+	return dsos_err_status(dsos_errno);
+}
 
-	/* Copy out statuses. No data to copy out. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_part_create_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
+static void rpc_part_find_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			     int server_num, void *ctxt)
+{
+	dsosd_msg_part_find_resp_t	*msg = (dsosd_msg_part_find_resp_t *)resp->msg;
+	rpc_part_find_out_t		*args_outp = (rpc_part_find_out_t *)ctxt;
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_debug("req %p server %d resp %p/%d id %ld status %d handle %p\n", req,
+		   server_num, resp->msg, resp->len, msg->hdr.id, msg->hdr.status, msg->handle);
+
+	args_outp->handles[server_num] = msg->handle;
+
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
 int dsos_rpc_part_find(rpc_part_find_in_t  *args_inp,
 		       rpc_part_find_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_part_find_req_t	*msg;
-	dsosd_msg_part_find_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_part_find_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type      = DSOSD_MSG_PART_FIND_REQ;
-		msg->cont_handle   = args_inp->cont_handles[i];
-		strncpy(msg->name, args_inp->name, sizeof(msg->name));
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_part_find_req_t));
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
-
-	/* Copy out results from the responses. Caller must free. */
 	args_outp->handles = (dsosd_handle_t *)malloc(sizeof(dsosd_handle_t) * g.num_servers);
 	if (!args_outp->handles)
 		dsos_fatal("out of memory\n");
-	dsos_err_clear();
+
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_part_find_cb, args_outp);
+
+	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_part_find_resp_t *)req_all->reqs[i]->resp;
-		args_outp->handles[i] = resp->handle;
-		dsos_err_set(i, resp->hdr.status);
-		dsos_debug("server %d req %p resp %p handle %p status %d\n",
-			   i, req_all->reqs[i], resp, resp->handle, resp->hdr.status);
+		msg = (dsosd_msg_part_find_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type         = DSOSD_MSG_PART_FIND_REQ;
+		msg->cont_handle      = args_inp->cont_handles[i];
+		strncpy(msg->name, args_inp->name, sizeof(msg->name));
+		req->bufs[i].send.len = sizeof(dsosd_msg_part_find_req_t);
 	}
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
+
+	return dsos_err_status(dsos_errno);
 }
 
 int dsos_rpc_part_set_state(rpc_part_set_state_in_t  *args_inp,
 			    rpc_part_set_state_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_part_set_state_req_t	*msg;
-	dsosd_msg_part_set_state_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_set_status_cb, NULL);
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_part_set_state_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type  = DSOSD_MSG_PART_SET_STATE_REQ;
-		msg->handle    = args_inp->handles[i];
-		msg->new_state = args_inp->new_state;
+		msg = (dsosd_msg_part_set_state_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type         = DSOSD_MSG_PART_SET_STATE_REQ;
+		msg->handle           = args_inp->handles[i];
+		msg->new_state        = args_inp->new_state;
+		req->bufs[i].send.len = sizeof(dsosd_msg_part_set_state_req_t);
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_part_set_state_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
-
-	/* Copy out statuses. No data to copy out. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_part_set_state_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
-
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	return dsos_err_status(dsos_errno);
 }
 
-static void obj_create_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void obj_create_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			  int server_num, void *ctxt)
 {
 	sos_obj_t	obj = ctxt;
-	dsos_obj_cb_t	cb = (dsos_obj_cb_t)req->ctxt2;
+	dsos_obj_cb_t	cb  = req->ctxt2.ptr1;
 
-	dsos_debug("obj %p req %p conn %p len %d cb %p/%p obj_id %08lx%08lx\n",
-		   obj, req, req->conn, len, req->ctxt2, req->ctxt3,
-		   req->resp->u.hdr2.obj_id.as_ref.ref);
+	dsos_debug("obj %p len %d from server %d req %p cb %p/%p obj_id %08lx%08lx\n",
+		   obj, resp->len, server_num, req, req->ctxt2.ptr1, req->ctxt2.ptr2,
+		   resp->msg->u.hdr2.obj_id.as_ref.ref.ods, resp->msg->u.hdr2.obj_id.as_ref.ref.obj);
 
-	obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
-	cb(obj, req->ctxt3);
+	obj->obj_ref.ref = resp->msg->u.hdr2.obj_id.as_ref.ref;
+	cb(obj, req->ctxt2.ptr2);
+
 	/* Drop the ref taken in dsos_obj_create(). */
 	sos_obj_put(obj);
 }
@@ -511,36 +418,29 @@ int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 	int				server_id;
 	char				*obj_data;
 	size_t				obj_sz, req_len;
-	sos_obj_t			obj;
 	dsos_req_t			*req;
-	dsos_schema_t			*schema;
 	dsosd_msg_obj_create_req_t	*msg;
 	uint8_t				sha[SHA256_DIGEST_LENGTH];
 
-	obj    = args_inp->obj;
-	schema = args_inp->schema;
-	sos_obj_data_get(obj, &obj_data, &obj_sz);
+	req = dsos_req_new(DSOS_REQ_ONE, obj_create_cb, args_inp->obj);
+	req->ctxt2.ptr1 = args_inp->cb;
+	req->ctxt2.ptr2 = args_inp->ctxt;
 
 	/* Calculate the owning DSOS server. */
+	sos_obj_data_get(args_inp->obj, &obj_data, &obj_sz);
 	SHA256(obj_data, obj_sz, sha);
 	server_id = sha[0] % g.num_servers;
-
-	req = dsos_req_new(obj_create_cb, obj);
-	if (!req)
-		return ENOMEM;
-	req->ctxt2 = args_inp->cb;
-	req->ctxt3 = args_inp->ctxt;
 
 	/*
 	 * Copy in args to the request message. If the object fits into
 	 * the message, copy it and send it in-line.
 	 */
-	msg = (dsosd_msg_obj_create_req_t *)req->msg;
+	msg = (dsosd_msg_obj_create_req_t *)req->buf->send.msg;
 	msg->hdr.type      = DSOSD_MSG_OBJ_CREATE_REQ;
 	msg->hdr2.obj_sz   = obj_sz;
-	msg->schema_handle = schema->handles[server_id];
+	msg->schema_handle = args_inp->schema->handles[server_id];
 
-	if (obj_sz > (req->msg_len_max - sizeof(dsosd_msg_obj_create_req_t))) {
+	if (obj_sz > (req->buf->send.max_len - sizeof(dsosd_msg_obj_create_req_t))) {
 		msg->hdr2.obj_va = (uint64_t)obj_data;
 		req_len = sizeof(dsosd_msg_obj_create_req_t);
 	} else {
@@ -549,25 +449,25 @@ int dsos_rpc_object_create(rpc_object_create_in_t *args_inp)
 		memcpy(msg->data, obj_data, obj_sz);
 		req_len = sizeof(dsosd_msg_obj_create_req_t) + obj_sz;
 	}
+	req->buf->send.len = req_len;
 
 	dsos_debug("obj %p schema %p obj_data %p obj_sz %d%s owned by server %d\n",
-		   obj, msg->schema_handle, obj_data, obj_sz,
-		   msg->hdr.flags & DSOSD_MSG_IMM ? " inline" : "",
-		   server_id);
+		   args_inp->obj, msg->schema_handle, obj_data, obj_sz,
+		   msg->hdr.flags & DSOSD_MSG_IMM ? " inline" : "", server_id);
 
 	/* This can block until resources (SQ or RQ credits) are available. */
-	return dsos_req_submit(req, &g.conns[server_id], req_len);
+	dsos_req_set_server(req, server_id);
+	return dsos_req_send(DSOS_REQ_CB, req);
 }
 
-int dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp)
+int dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp,
+			   rpc_object_delete_out_t *args_outp)
 {
 	int		ret, server_num;
 	dsos_req_t	*req;
 	dsos_schema_t	*schema;
 
-	req = dsos_req_new(rpc_signal_cb, NULL);
-	if (!req)
-		return ENOMEM;
+	req = dsos_req_new(DSOS_REQ_ONE, rpc_set_status_cb, NULL);
 
 	schema     = (dsos_schema_t *)args_inp->obj->ctxt;
 	server_num = dsos_obj_server(args_inp->obj);
@@ -575,23 +475,16 @@ int dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp)
 	dsos_debug("obj %p %08lx%08lx\n", args_inp->obj,
 		   args_inp->obj->obj_ref.ref.ods, args_inp->obj->obj_ref.ref.obj);
 
-	req->msg->u.hdr.type = DSOSD_MSG_OBJ_DELETE_REQ;
-	req->msg->u.hdr2.obj_id.as_ref         = args_inp->obj->obj_ref;
-	req->msg->u.obj_delete_req.cont_handle = schema->cont->handles[server_num];
+	req->buf->send.msg->u.hdr.type                   = DSOSD_MSG_OBJ_DELETE_REQ;
+	req->buf->send.msg->u.hdr2.obj_id.as_ref         = args_inp->obj->obj_ref;
+	req->buf->send.msg->u.obj_delete_req.cont_handle = schema->cont->handles[server_num];
+	req->buf->send.len = sizeof(dsosd_msg_obj_delete_req_t);
 
-	ret = dsos_req_submit(req, &g.conns[server_num], sizeof(dsosd_msg_obj_delete_req_t));
-	if (ret) {
-		dsos_error("ret %d\n", ret);
-		return ret;
-	}
+	dsos_req_set_server(req, server_num);
 
-	sem_wait(&req->sem);
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB, req);
 
-	ret = req->resp->u.hdr.status;
-
-	dsos_req_put(req);
-
-	return ret;
+	return dsos_err_status(dsos_errno);
 }
 
 static char *serialize_uint32(const int v, char **pp, size_t *psz)
@@ -762,201 +655,170 @@ void dsos_rpc_free_schema_template(sos_schema_template_t t)
 	free(t);
 }
 
-static void rpc_obj_get_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void rpc_obj_get_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			   int server_num, void *ctxt)
 {
 	size_t				obj_sz;
 	char				*obj_data;
-	rpc_obj_get_out_t		*args_outp = ctxt;
-	dsosd_msg_obj_get_resp_t	*resp = (dsosd_msg_obj_get_resp_t *)req->resp;
+	sos_obj_t			obj = (sos_obj_t)ctxt;
+	dsosd_msg_obj_get_resp_t	*msg = (dsosd_msg_obj_get_resp_t *)resp->msg;
 
-	sos_obj_data_get(args_outp->sos_obj, &obj_data, &obj_sz);
-
-	if (resp && resp->hdr.flags & DSOSD_MSG_IMM) {
-		memcpy(obj_data, resp->data, resp->hdr2.obj_sz);
-		dsos_debug("req %p len %d copied to obj_data %p\n", req, len, obj_data);
+	if (msg->hdr.flags & DSOSD_MSG_IMM) {
+		sos_obj_data_get(obj, &obj_data, &obj_sz);
+		memcpy(obj_data, msg->data, msg->hdr2.obj_sz);
+		dsos_debug("req %p len %d copied to obj_data %p\n", req, resp->len, obj_data);
 	} else {
-		dsos_debug("req %p len %d flushed\n", req, len);
+		dsos_debug("req %p len %d flushed\n", req, resp->len);
 	}
+	obj->obj_ref.ref = msg->hdr2.obj_id.as_ref.ref;
 
-	args_outp->status = req->resp->u.hdr.status;
-
-	sem_post(&req->sem);
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
 int dsos_rpc_obj_get(rpc_obj_get_in_t *args_inp, rpc_obj_get_out_t *args_outp)
 {
-	int			ret, server_num;
+	int			server_num;
 	size_t			obj_sz;
 	char			*obj_data;
 	dsos_req_t		*req;
 	dsosd_msg_obj_get_req_t	*msg;
 
+	req = dsos_req_new(DSOS_REQ_ONE, rpc_obj_get_cb, args_inp->sos_obj);
+
+	server_num = dsos_obj_server(args_inp->sos_obj);
 	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
 
-	req = dsos_req_new(rpc_obj_get_cb, args_outp);
-	if (!req)
-		return ENOMEM;
-
-	/* This is so the callback can see the object. */
-	args_outp->sos_obj = args_inp->sos_obj;
-
-	msg = (dsosd_msg_obj_get_req_t *)req->msg;
+	msg = (dsosd_msg_obj_get_req_t *)req->buf->send.msg;
 	msg->hdr.type          = DSOSD_MSG_OBJ_GET_REQ;
-	msg->hdr.flags         = 0;
-	msg->hdr.status        = 0;
-	msg->cont_handle       = args_inp->cont_handle;
+	msg->cont_handle       = args_inp->cont->handles[server_num];
 	msg->obj_id.as_ref     = args_inp->obj_id;
 	msg->hdr2.obj_va       = (uint64_t)obj_data;
 	msg->hdr2.obj_sz       = obj_sz;
+	req->buf->send.len     = sizeof(dsosd_msg_obj_get_req_t);
 
-	ret = dsos_req_submit(req, &g.conns[msg->obj_id.serv], sizeof(dsosd_msg_obj_get_req_t));
-	if (ret) {
-		dsos_error("ret %d\n", ret);
-		return ret;
-	}
-
-	sem_wait(&req->sem);
+	dsos_req_set_server(req, server_num);
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB, req);
 
 	dsos_debug("obj_id %08lx%08lx flags %x sos_obj %p status %d\n",
 		   args_inp->obj_id.ref.ods, args_inp->obj_id.ref.obj,
-		   req->resp->u.hdr.flags, args_outp->sos_obj, args_outp->status);
+		   req->buf->resp.msg->u.hdr.flags, args_inp->sos_obj,
+		   dsos_err_status(dsos_errno));
 
-	return 0;
+	return dsos_err_status(dsos_errno);
+}
+
+static void rpc_iter_new_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			    int server_num, void *ctxt)
+{
+	dsosd_msg_iterator_new_resp_t	*msg = (dsosd_msg_iterator_new_resp_t *)resp->msg;
+	rpc_iter_new_out_t		*args_outp = (rpc_iter_new_out_t *)ctxt;
+
+	dsos_debug("req %p server %d resp %p/%d id %ld status %d handle %p\n", req,
+		   server_num, resp->msg, resp->len, msg->hdr.id, msg->hdr.status, msg->iter_handle);
+
+	args_outp->handles[server_num] = msg->iter_handle;
+
+	dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 }
 
 int dsos_rpc_iter_new(rpc_iter_new_in_t *args_inp, rpc_iter_new_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_iterator_new_req_t	*msg;
-	dsosd_msg_iterator_new_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
-
-	/* Copy in args to the request messages. */
-	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_iterator_new_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type      = DSOSD_MSG_ITERATOR_NEW_REQ;
-		msg->schema_handle = args_inp->schema_handles[i];
-		msg->attr_id       = sos_attr_id(args_inp->attr);
-	}
-
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_new_req_t));
-	if (ret)
-		return ret;
-
-	sem_wait(&req_all->sem);
-
-	/* Copy out results from the responses. Caller must free. */
 	args_outp->handles = (dsosd_handle_t *)malloc(sizeof(dsosd_handle_t) * g.num_servers);
 	if (!args_outp->handles)
 		dsos_fatal("out of memory\n");
-	dsos_err_clear();
+
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_iter_new_cb, args_outp);
+
+	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_iterator_new_resp_t *)req_all->reqs[i]->resp;
-		args_outp->handles[i] = resp->iter_handle;
-		dsos_err_set(i, resp->hdr.status);
-		dsos_debug("server %d req %p resp %p handle %p status %d\n",
-			   i, req_all->reqs[i], resp, resp->iter_handle, resp->hdr.status);
+		msg = (dsosd_msg_iterator_new_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type          = DSOSD_MSG_ITERATOR_NEW_REQ;
+		msg->schema_handle     = args_inp->schema_handles[i];
+		msg->attr_id           = sos_attr_id(args_inp->attr);
+		req->bufs[i].send.len  = sizeof(dsosd_msg_iterator_new_req_t);
 	}
 
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
+
+	return dsos_err_status(dsos_errno);
 }
 
 int dsos_rpc_iter_close(rpc_iter_close_in_t *args_inp, rpc_iter_close_out_t *args_outp)
 {
-	int				i, ret;
-	dsos_req_all_t			*req_all;
+	int				i;
+	dsos_req_t			*req;
 	dsosd_msg_iterator_close_req_t	*msg;
-	dsosd_msg_iterator_close_resp_t	*resp;
 
-	req_all = dsos_req_all_new(rpc_all_signal_cb, NULL);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_set_status_cb, NULL);
 
 	/* Copy in args to the request messages. */
 	for (i = 0; i < g.num_servers; ++i) {
-		msg = (dsosd_msg_iterator_close_req_t *)req_all->reqs[i]->msg;
-		msg->hdr.type    = DSOSD_MSG_ITERATOR_CLOSE_REQ;
-		msg->iter_handle = args_inp->iter_handles[i];
+		msg = (dsosd_msg_iterator_close_req_t *)req->bufs[i].send.msg;
+		msg->hdr.type          = DSOSD_MSG_ITERATOR_CLOSE_REQ;
+		msg->iter_handle       = args_inp->iter_handles[i];
+		req->bufs[i].send.len  = sizeof(dsosd_msg_iterator_close_req_t);
 	}
 
-	ret = dsos_req_all_submit(req_all, sizeof(dsosd_msg_iterator_close_req_t));
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
-
-	/* Copy out results from the responses. */
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		resp = (dsosd_msg_iterator_close_resp_t *)req_all->reqs[i]->resp;
-		dsos_err_set(i, resp->hdr.status);
-	}
-
-	dsos_req_all_put(req_all);
-	return dsos_err_status();
+	return dsos_err_status(dsos_errno);
 }
 
-static void rpc_iter_step_all_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void rpc_step_all_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			    int server_num, void *ctxt)
 {
 	char				*obj_data;
 	size_t				obj_sz;
-	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
-	dsos_ptr_tuple_t		*args = (dsos_ptr_tuple_t *)ctxt;
-	rpc_iter_step_all_in_t		*args_inp  = (rpc_iter_step_all_in_t  *)args->ptr1;
-	rpc_iter_step_all_out_t		*args_outp = (rpc_iter_step_all_out_t *)args->ptr2;
-	int				server_num = req->conn->server_id;
+	dsosd_msg_iterator_step_resp_t	*msg = (dsosd_msg_iterator_step_resp_t *)resp->msg;
+	rpc_iter_step_all_in_t		*args_inp  = (rpc_iter_step_all_in_t  *)req->ctxt2.ptr1;
+	rpc_iter_step_all_out_t		*args_outp = (rpc_iter_step_all_out_t *)req->ctxt2.ptr2;
 
-	switch (resp->hdr.status) {
+	switch (msg->hdr.status) {
 	    case 0:
 		args_outp->found[server_num] = 1;
-		if (resp->hdr.flags & DSOSD_MSG_IMM) {
+		if (msg->hdr.flags & DSOSD_MSG_IMM) {
 			sos_obj_data_get(args_inp->sos_objs[server_num], &obj_data, &obj_sz);
-			memcpy(obj_data, resp->data, obj_sz);
+			memcpy(obj_data, msg->data, obj_sz);
 			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
 		} else {
-			dsos_debug("obj len %d from server %d\n", resp->hdr2.obj_sz, server_num);
+			dsos_debug("obj len %d from server %d\n", msg->hdr2.obj_sz, server_num);
 		}
-		args_inp->sos_objs[server_num]->obj_ref.ref = resp->hdr2.obj_id.as_ref.ref;
+		args_inp->sos_objs[server_num]->obj_ref.ref = msg->hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		args_outp->found[server_num] = 0;
 		break;
 	    default:
-		dsos_err_set(server_num, resp->hdr.status);
-		dsos_error("err %d from server %d\n", resp->hdr.status, server_num);
+		args_outp->found[server_num] = 0;
+		dsos_error("err %d from server %d\n", msg->hdr.status, server_num);
+		dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 		break;
 	}
-
-	if (!ods_atomic_dec(&req->req_all->num_reqs_pend))
-		sem_post(&req->req_all->sem);
 }
 
 int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_out_t *args_outp)
 {
-	int				i, ret;
+	int				i;
 	size_t				buf_len, key_sz, obj_sz;
 	char				*buf, *obj_data, *p;
 	void				*key_data;
 	dsos_req_t			*req;
-	dsos_req_all_t			*req_all;
 	dsosd_msg_iterator_step_req_t	*msg;
-	dsosd_msg_iterator_step_resp_t	*resp;
 	dsos_ptr_tuple_t		ctxt;
 
 	dsos_debug("op %d\n", args_inp->op);
 
-	/*
-	 * Allocate space for output args, which are filled in by the
-	 * individual server RPC callbacks (rpc_iter_step_all_cb()).
-	 */
 	args_outp->found = (int *)malloc(g.num_servers * sizeof(int));
 	if (!args_outp->found)
 		return ENOMEM;
 
-	ctxt.ptr1 = args_inp;
-	ctxt.ptr2 = args_outp;
-	req_all = dsos_req_all_async_new(rpc_iter_step_all_cb, &ctxt);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_step_all_cb, NULL);
+	req->ctxt2.ptr1 = args_inp;
+	req->ctxt2.ptr2 = args_outp;
 
 	/* Copy in args to the request messages. */
 	if (args_inp->key) {
@@ -965,8 +827,7 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 	}
 	for (i = 0; i < g.num_servers; ++i) {
 		sos_obj_data_get(args_inp->sos_objs[i], &obj_data, &obj_sz);
-		req = req_all->reqs[i];
-		msg = (dsosd_msg_iterator_step_req_t *)req->msg;
+		msg = (dsosd_msg_iterator_step_req_t *)req->bufs[i].send.msg;
 		msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
 		msg->op          = args_inp->op;
 		msg->iter_handle = args_inp->iter_handles[i];
@@ -974,68 +835,54 @@ int dsos_rpc_iter_step_all(rpc_iter_step_all_in_t *args_inp, rpc_iter_step_all_o
 		msg->hdr2.obj_sz = obj_sz;
 		if (args_inp->key) {
 			// buf_len is what's available in the serialization buffer
-			buf_len = DSOSD_MSG_MAX_DATA - sizeof(dsosd_msg_iterator_step_req_t);
+			buf_len = req->bufs[i].send.max_len - sizeof(dsosd_msg_iterator_step_req_t);
 			buf = msg->data;
 			serialize_uint32(key_sz, &buf, &buf_len);
+			// XXX need check for buf too small (serialize_buf returns NULL)
 			serialize_buf(key_data, key_sz, &buf, &buf_len);
 			msg->data_len = buf - msg->data;
 		} else {
 			msg->data_len = 0;
 		}
-		req->msg_len = sizeof(dsosd_msg_iterator_step_req_t) + msg->data_len;
+		req->bufs[i].send.len = sizeof(dsosd_msg_iterator_step_req_t) + msg->data_len;
 	}
 
-	dsos_err_clear();
-	ret = dsos_req_all_submit(req_all, 0);
-	if (ret)
-		return ret;
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB_ALL, req);
 
-	sem_wait(&req_all->sem);
-
-	dsos_req_all_put(req_all);
-
-	return dsos_err_status();
+	return dsos_err_status(dsos_errno);
 }
 
-/*
- * In this callback, the response message might contain an object, if
- * it's small enough to fit in-line. Copy the object payload to the
- * user's object. This must be done here because after this callback
- * returns, the zap message buffer is invalid.
- */
-static void rpc_step_one_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void rpc_step_one_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+			    int server_num, void *ctxt)
 {
 	size_t				obj_sz;
 	char				*obj_data;
-	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
+	dsosd_msg_iterator_step_resp_t	*msg = (dsosd_msg_iterator_step_resp_t *)resp->msg;
 	dsos_ptr_tuple_t		*args = (dsos_ptr_tuple_t *)ctxt;
 	rpc_iter_step_one_in_t		*args_inp  = args->ptr1;
 	rpc_iter_step_one_out_t		*args_outp = args->ptr2;
-	int				server_num = req->conn->server_id;
 
-	switch (resp->hdr.status) {
+	switch (msg->hdr.status) {
 	    case 0:
 		args_outp->found = 1;
-		if (resp->hdr.flags & DSOSD_MSG_IMM) {
+		if (msg->hdr.flags & DSOSD_MSG_IMM) {
 			sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
-			memcpy(obj_data, resp->data, obj_sz);
+			memcpy(obj_data, msg->data, obj_sz);
 			dsos_debug("obj len %d from server %d inline\n", obj_sz, server_num);
 		} else {
 			dsos_debug("obj len %d from server %d\n", obj_sz, server_num);
 		}
-		args_inp->sos_obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
+		args_inp->sos_obj->obj_ref.ref = msg->hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		args_outp->found = 0;
 		break;
 	    default:
 		args_outp->found  = 0;
-		args_outp->status = resp->hdr.status;
-		dsos_error("err %d from server %d\n", resp->hdr.status, server_num);
+		dsos_error("err %d from server %d\n", msg->hdr.status, server_num);
+		dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 		break;
 	}
-
-	sem_post(&req->sem);
 }
 
 int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_out_t *args_outp)
@@ -1047,65 +894,63 @@ int dsos_rpc_iter_step_one(rpc_iter_step_one_in_t *args_inp, rpc_iter_step_one_o
 	dsosd_msg_iterator_step_req_t	*msg;
 	dsos_ptr_tuple_t		ctxt;
 
-	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
-
 	ctxt.ptr1 = args_inp;
 	ctxt.ptr2 = args_outp;
-	req = dsos_req_new(rpc_step_one_cb, &ctxt);
+	req = dsos_req_new(DSOS_REQ_ALL, rpc_step_one_cb, &ctxt);
+
+	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
 
 	/* Copy in args to the request message. */
-	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
-	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
-	msg->op          = args_inp->op;
-	msg->iter_handle = args_inp->iter_handle;
-	msg->data_len    = 0;
-	msg->hdr2.obj_va = (uint64_t)obj_data;
-	msg->hdr2.obj_sz = obj_sz;
+	msg = (dsosd_msg_iterator_step_req_t *)req->buf->send.msg;
+	msg->hdr.type      = DSOSD_MSG_ITERATOR_STEP_REQ;
+	msg->op            = args_inp->op;
+	msg->iter_handle   = args_inp->iter_handle;
+	msg->data_len      = 0;
+	msg->hdr2.obj_va   = (uint64_t)obj_data;
+	msg->hdr2.obj_sz   = obj_sz;
+	req->buf->send.len = sizeof(dsosd_msg_iterator_step_req_t);
 
-	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
-	if (ret)
-		return ret;
+	dsos_req_set_server(req, args_inp->server_num);
 
-	sem_wait(&req->sem);
+	dsos_req_send(DSOS_REQ_WAIT | DSOS_REQ_CB, req);
 
-	dsos_req_put(req);
-
-	return args_outp->status;
+	return dsos_err_status(dsos_errno);
 }
 
-static void rpc_step_one_async_cb(dsos_req_t *req, size_t len, void *ctxt)
+static void rpc_step_one_async_cb(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+				  int server_num, void *ctxt)
 {
 	size_t				obj_sz;
 	char				*obj_data;
-	dsosd_msg_iterator_step_resp_t	*resp = (dsosd_msg_iterator_step_resp_t *)req->resp;
-	dsos_iter_t			*iter = (dsos_iter_t *)ctxt;
-	int				server_num = req->conn->server_id;
-	dsos_req_cb2_t			cb  = req->ctxt2;
-	sos_obj_t			obj = req->ctxt3;
+	dsosd_msg_iterator_step_resp_t	*msg  = (dsosd_msg_iterator_step_resp_t *)resp->msg;
+	sos_obj_t			obj   = ctxt;
+	dsos_req_cb2_t			cb    = req->ctxt2.ptr1;
+	dsos_iter_t			*iter = req->ctxt2.ptr2;
 
-	switch (resp->hdr.status) {
+	switch (msg->hdr.status) {
 	    case 0:
-		if (resp->hdr.flags & DSOSD_MSG_IMM) {
+		if (msg->hdr.flags & DSOSD_MSG_IMM) {
 			sos_obj_data_get(obj, &obj_data, &obj_sz);
-			memcpy(obj_data, resp->data, obj_sz);
+			memcpy(obj_data, msg->data, obj_sz);
 			dsos_debug("obj %p len %d from server %d inline\n", obj, obj_sz, server_num);
 		} else {
-			dsos_debug("obj %p len %d from server %d\n", obj, resp->hdr2.obj_sz, server_num);
+			dsos_debug("obj %p len %d from server %d\n", obj, msg->hdr2.obj_sz, server_num);
 		}
-		obj->obj_ref.ref = req->resp->u.hdr2.obj_id.as_ref.ref;
+		obj->obj_ref.ref = msg->hdr2.obj_id.as_ref.ref;
 		break;
 	    case ENOENT:
 		dsos_debug("no obj from server %d\n", server_num);
 		break;
 	    default:
-		dsos_error("err %d from server %d\n", resp->hdr.status, server_num);
+		dsos_error("err %d from server %d\n", msg->hdr.status, server_num);
+		dsos_err_set_remote(req->status, server_num, msg->hdr.status);
 		break;
 	}
 	/*
 	 * Call the iterator callback. This is only to avoid mixing
 	 * RPC- and API-layer abstractions.
 	 */
-	cb(req, iter, obj);
+	cb(req, flags, iter, obj);
 }
 
 dsos_req_t *dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
@@ -1116,24 +961,25 @@ dsos_req_t *dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp)
 	dsos_req_t			*req;
 	dsosd_msg_iterator_step_req_t	*msg;
 
+	req = dsos_req_new(DSOS_REQ_ONE, rpc_step_one_async_cb, args_inp->sos_obj);
+	req->ctxt2.ptr1 = args_inp->cb;
+	req->ctxt2.ptr2 = args_inp->iter;
+
 	sos_obj_data_get(args_inp->sos_obj, &obj_data, &obj_sz);
 
-	req = dsos_req_new(rpc_step_one_async_cb, args_inp->iter);
-	if (!req)
-		return NULL;
-	req->ctxt2 = args_inp->cb;
-	req->ctxt3 = args_inp->sos_obj;
-
 	/* Copy in args to the request message. */
-	msg = (dsosd_msg_iterator_step_req_t *)req->msg;
-	msg->hdr.type    = DSOSD_MSG_ITERATOR_STEP_REQ;
-	msg->op          = args_inp->op;
-	msg->iter_handle = args_inp->iter_handle;
-	msg->data_len    = 0;
-	msg->hdr2.obj_va = (uint64_t)obj_data;
-	msg->hdr2.obj_sz = obj_sz;
+	msg = (dsosd_msg_iterator_step_req_t *)req->buf->send.msg;
+	msg->hdr.type      = DSOSD_MSG_ITERATOR_STEP_REQ;
+	msg->op            = args_inp->op;
+	msg->iter_handle   = args_inp->iter_handle;
+	msg->data_len      = 0;
+	msg->hdr2.obj_va   = (uint64_t)obj_data;
+	msg->hdr2.obj_sz   = obj_sz;
+	req->buf->send.len = sizeof(dsosd_msg_iterator_step_req_t);
 
-	ret = dsos_req_submit(req, &g.conns[args_inp->server_num], sizeof(dsosd_msg_iterator_step_req_t));
+	dsos_req_set_server(req, args_inp->server_num);
+
+	ret = dsos_req_send(DSOS_REQ_CB, req);
 	if (ret)
 		return NULL;
 	return req;

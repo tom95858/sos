@@ -2,46 +2,29 @@
 
 static int	iter_rbn_cmp_fn(void *tree_key, void *key);
 
-int dsos_ping(int server_num, struct dsos_ping_stats *stats)
+int dsos_ping_one(int server_num, struct dsos_ping_stats *stats)
 {
 	int			ret;
 	rpc_ping_in_t		args_in;
 	rpc_ping_out_t		args_out;
 
 	args_in.server_num = server_num;
+	args_in.stats      = stats;
 
-	ret = dsos_rpc_ping(&args_in, &args_out);
-
-	if (!ret && stats) {
-		stats->tot_num_connects    = args_out.tot_num_connects;
-		stats->tot_num_disconnects = args_out.tot_num_disconnects;
-		stats->tot_num_reqs        = args_out.tot_num_reqs;
-		stats->num_clients         = args_out.num_clients;
-	}
-
-	return ret;
+	return dsos_rpc_ping_one(&args_in, &args_out);
 }
 
 int dsos_ping_all(struct dsos_ping_stats **statsp, int debug)
 {
-	int			i, ret;
+	int                     ret;
 	rpc_ping_in_t		args_in;
-	rpc_ping_out_t		*args_outp;
+	rpc_ping_out_t          args_outp;
 
 	args_in.debug = debug;
+
 	ret = dsos_rpc_ping_all(&args_in, &args_outp);
 
-	if (!ret && statsp) {
-		*statsp = (struct dsos_ping_stats *)malloc(sizeof(struct dsos_ping_stats) * g.num_servers);
-		for (i = 0; i < g.num_servers; ++i) {
-			(*statsp)[i].tot_num_connects    = args_outp[i].tot_num_connects;
-			(*statsp)[i].tot_num_disconnects = args_outp[i].tot_num_disconnects;
-			(*statsp)[i].tot_num_reqs        = args_outp[i].tot_num_reqs;
-			(*statsp)[i].num_clients         = args_outp[i].num_clients;
-			(*statsp)[i].nsecs               = args_outp[i].nsecs;
-		}
-	}
-	free(args_outp);
+	*statsp = args_outp.stats;
 
 	return ret;
 }
@@ -286,7 +269,7 @@ static int iter_reset(dsos_iter_t *iter)
 	return 0;
 }
 
-static void iter_prefetch_cb(dsos_req_t *req, void *ctxt1, void *ctxt2)
+static void iter_prefetch_cb(dsos_req_t *req, uint32_t flags, void *ctxt1, void *ctxt2)
 {
 	dsos_iter_t	*iter = (dsos_iter_t *)ctxt1;
 	sos_obj_t	obj   = (sos_obj_t)ctxt2;
@@ -295,7 +278,8 @@ static void iter_prefetch_cb(dsos_req_t *req, void *ctxt1, void *ctxt2)
 
 	dsos_debug("got obj %p/%08lx%08lx iter %p done %d req %p prefetch_req %p status %d from server %d\n",
 		   obj, obj->obj_ref.ref.ods, obj->obj_ref.ref.obj,
-		   iter, iter->done, req, iter->prefetch_req, req->resp->u.hdr.status, req->conn->server_id);
+		   iter, iter->done, req, iter->prefetch_req, req->buf->resp.msg->u.hdr.status,
+		   req->server_num);
 
 	if (iter->done) {
 		pthread_mutex_unlock(&iter->lock);
@@ -309,7 +293,7 @@ static void iter_prefetch_cb(dsos_req_t *req, void *ctxt1, void *ctxt2)
 		return;
 	}
 
-	switch (req->resp->u.hdr.status) {
+	switch (req->buf->resp.msg->u.hdr.status) {
 	    case 0:
 		iter_insert_obj(iter, obj);
 		iter->status = 0;
@@ -320,7 +304,7 @@ static void iter_prefetch_cb(dsos_req_t *req, void *ctxt1, void *ctxt2)
 		break;
 	    default:
 		sos_obj_put(obj);
-		iter->status = req->resp->u.hdr.status;
+		iter->status = req->buf->resp.msg->u.hdr.status;
 		break;
 	}
 

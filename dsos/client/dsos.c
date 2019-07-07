@@ -17,6 +17,7 @@
 
 /* Global variables. */
 struct globals_s	g;
+__thread dsos_err_t	dsos_errno;
 
 #define ROUNDUP(s,r)	((s + (r - 1)) & ~(r - 1))
 
@@ -51,23 +52,31 @@ int dsos_init(const char *config_filename)
 	if (ret)
 		return ENOENT;
 
-	g.zap = zap_get(g.opts.zap_prov_name, dsos_log, NULL);
-	if (!g.zap)
-		return ENETDOWN;
+	dsos_errno = dsos_err_new();
 
+	g.zap = zap_get(g.opts.zap_prov_name, dsos_log, NULL);
+	if (!g.zap) {
+		dsos_err_set_local_all(dsos_errno, ENETDOWN);
+		return DSOS_ERR_LOCAL;
+	}
+
+	dsos_err_clear(dsos_errno);
 	for (i = 0; i < g.num_servers; ++i) {
 		ret = dsos_connect(g.conns[i].host, g.conns[i].service, g.conns[i].server_id, 0);
-		if (ret)
+		if (ret) {
+			dsos_err_set_local(dsos_errno, i, ret);
 			dsos_error("err %d (%s) connecting to server %d at %s:%s\n",
 				   ret, zap_err_str(ret), i, g.conns[i].host, g.conns[i].service);
+		}
 	}
-	dsos_err_clear();
+	if (dsos_err_status(dsos_errno) & DSOS_ERR_LOCAL)
+		return DSOS_ERR_LOCAL;
 	for (i = 0; i < g.num_servers; ++i) {
 		sem_wait(&g.conns[i].conn_sem);
-		dsos_err_set(i, g.conns[i].conn_status);
+		dsos_err_set_local(dsos_errno, i, g.conns[i].conn_status);
 	}
-	if (dsos_err_status())
-		return ECONNREFUSED;
+	if (ret = dsos_err_status(dsos_errno))
+		return ret;
 	dsos_debug("connected to %d servers\n", g.num_servers);
 
 	/*
@@ -91,27 +100,27 @@ int dsos_init(const char *config_filename)
 
 	ods_obj_allocator_set(shared_heap_alloc, shared_heap_free);
 
-	dsos_err_clear();
+	dsos_err_clear(dsos_errno);
 	for (i = 0; i < g.num_servers; ++i) {
 		conn = &g.conns[i];
 		zerr = zap_map(conn->ep, &conn->map, g.heap_buf, g.opts.heap_sz, ZAP_ACCESS_READ);
 		if (zerr) {
 			dsos_error("srv %d: err %d (%s) mapping shared heap %p sz %d\n",
 				   i, zerr, zap_err_str(zerr), g.heap_buf, g.opts.heap_sz);
-			dsos_err_set(i, zerr);
+			dsos_err_set_local(dsos_errno, i, zerr);
 			continue;
 		}
 		zerr = zap_share(conn->ep, conn->map, NULL, 0);
 		if (zerr) {
 			dsos_error("srv %d: err %d (%s) sharing heap map %p\n", i, conn->map);
-			dsos_err_set(i, zerr);
+			dsos_err_set_local(dsos_errno, i, zerr);
 			continue;
 		}
 		dsos_debug("heap %p/%d has map %p for server %d\n",
 			   g.heap_buf, g.opts.heap_sz, conn->map, i);
 	}
-	if (dsos_err_status())
-		return EREMOTE;
+	if (ret = dsos_err_status(dsos_errno))
+		return ret;
 
 	dsos_req_init();
 

@@ -15,8 +15,8 @@ typedef uint64_t	dsosd_handle_t;
 
 /*
  * A DSOS object id is unique within a distributed container. The top
- * uint64_t identifies the server where the object resides, and the
- * bottom uint64_t is the ODS ref which identifies the object within
+ * uint32_t identifies the server where the object resides, and the
+ * bottom uint32_t is the object ref which identifies the object within
  * its container on that server. This overlays the original (local) SOS
  * obj id of the same size; it overloads the ODS ref part to store
  * the server ref. The ODS ref is not needed because it is now
@@ -268,7 +268,6 @@ enum {
 	DSOSD_MSG_ITER_OP_BEGIN,
 	DSOSD_MSG_ITER_OP_END,
 	DSOSD_MSG_ITER_OP_NEXT,
-	DSOSD_MSG_ITER_OP_PREV,
 };
 
 typedef struct dsosd_msg_iterator_step_req {

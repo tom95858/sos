@@ -1,54 +1,120 @@
 /*
- * The DSOS request layer sends messages to one or more servers and
- * matches them up with response messages that later arrive.  A
- * message is a 2k-byte buffer of formatted data represented as a
- * large union of C structures in dsos/server/dsos_msg_layout.h.  The
- * RPC layer marshalls arguments in and out of these messages to
- * create a server request. Every request carries a client-unique
- * 64-bit id that the server reflects back in its response message.
- * The request layer uses this id to match request and response.
+ * The DSOS request layer sends "request" messages to one or more
+ * servers and matches them up with "response" messages that later
+ * arrive.  A request or response message is a 2k-byte buffer of
+ * formatted data represented as a large union of C structures defined
+ * in dsos/server/dsos_msg_layout.h.  The RPC layer, which sits above
+ * this layer, marshalls arguments into these messages to create a
+ * server request. This layer sees them as blobs except that it looks
+ * inside to set and read the message "id." Every request carries a
+ * client-unique 64-bit id that the server reflects back in its
+ * response message.  The code in this file uses this id to match
+ * request and response.
  *
- * To send a message to a single server, a request is first allocated:
+ * To send a request to a single server, or to all servers, a dsos_req_t
+ * is first allocated:
  *
- *   dsos_req_t *req = dsos_req_new(callback_fn, ctxt);
+ *   dsos_req_t *req_one = dsos_req_new(DSOS_REQ_ONE, callback_fn, ctxt);
+ *   dsos_req_t *req_all = dsos_req_new(DSOS_REQ_ALL, callback_fn, ctxt);
  *
  * By requiring allocation, this layer can support transports that
- * directly provide their buffers, thereby avoiding a copy. Then the
- * message can be accessed:
+ * directly provide their buffers, thereby avoiding a copy.
+ * With DSOS_REQ_ALL, g.num_servers request message buffers are allocated;
+ * with DSOS_REQ_ONE, one is allocated.
  *
- *   dsos_msg_t *msg = req->msg;
+ * The request message then can be filled in. For a single server:
+ *
+ *   dsos_msg_t *msg = req->buf->send.msg;
  *   msg->hdr.type = DSOS_PING_REQ;
  *   // fill in remaining message fields...
+ *   // ...
+ *   req->buf->send.len = sizeof(dsosd_msg_ping_req_t);
+ *   dsos_req_set_server(req, server_num_to_send_to);
+ *
+ * For DSOS_REQ_ALL, use a loop:
+ *
+ *   for (i = 0; i < g.num_servers; ++i) {
+ *       msg = (dsosd_msg_ping_req_t *)req->bufs[i].send.msg;
+ *       msg->hdr.type = DSOSD_MSG_PING_REQ;
+ *       req->bufs[i]->send.len = sizeof(dsosd_msg_ping_req_t);
+ *   }
+ *
+ * Note that dsos_req_set_server() is not called in the DSOS_REQ_ALL case
+ * since all servers are used.
  *
  * Once the message has been formatted, it can be sent:
  *
- *   // conn is the connection object for the destination server
- *   err = dsos_req_submit(req, conn, len);
+ *   err = dsos_req_send(flags, req);
  *
- * The send is asynchronous. The DSOS server destined for the message
- * will send a response message which contains the same 64-bit message ID
- * as the request. The request layer uses a red-black tree to match up these
- * IDs. It is an error for a response message to be received that cannot
- * be matched with a request message. However, in the future such unsolicited
- * messages may be supported.
+ * The flags are as follows and can be logically or'd together:
  *
- * When the response message arrives, the callback specified in
- * the dsos_req_new call is called:
+ *   1. Flags for callback management: the callback_fn specified in the
+ *      dsos_req_new() is called when a response message arrives for:
  *
- *   void my_callback(dsos_req_t *req, size_t len, void *ctxt);
+ *        DSOS_REQ_CB_FIRST  - call on first response
+ *        DSOS_REQ_CB_LAST   - call on last response
+ *        DSOS_REQ_CB_ALL    - call on every response
+ *        DSOS_REQ_CB        - shortcut for DSOS_REQ_CB_ALL
  *
- * The response message is in req->resp.
+ *      Note that callback functions occur on zap worker threads. This
+ *      means that responses from different servers may be processed
+ *      by concurrent threads.
  *
- * The request object must be freed when no longer needed:
+ *   2. Flags for waiting: the dsos_req_send() call is asynchronous unless
+ *      the following flag is specified.
  *
+ *        DSOS_REQ_WAIT
+ *
+ *      This does a sem_wait(req->sem) for each expected response. The
+ *      sem_post()s are done after each callback. Thus, the caller will
+ *      block until the last callback has returned.
+ *
+ * The DSOS server(s) destined for the requests(s) will send
+ * response message(s) which contain the same 64-bit message IDs as the
+ * request(s). The request layer uses a red-black tree to match up these
+ * IDs. It is an error for a response message to be received that
+ * cannot be matched with a request message. However, in the future
+ * such unsolicited messages may be supported.
+ *
+ * Callback functions are like the following:
+ *
+ *   // The response message is in resp->msg; it's length is resp->len.
+ *   // server_num is the server # of where it came from.
+ *   // flags is a logical or of DSOS_REQ_CB_FIRST or DSOS_REQ_CB_LAST
+ *   // and indicates whether this response is the first one seen so far
+ *   // for the request, the last, or neither. Note that a response can be
+ *   // both first and last.
+ *   void callback_fn(dsos_req_t *req, dsos_req_flags_t flags, dsos_buf_t *resp,
+ *                    int server_num, void *ctxt)
+ *   {
+ *      ....
+ *     dsos_err_set_remote(req->status, server_num, msg->hdr.status);
+ *   }
+ *
+ * The request object helps with surfacing both local and remote
+ * status to the caller. Each DSOS request can have both local and
+ * remote failures which are surfaced via two int vectors each of
+ * g.num_servers elements. The global dsos_errno is a dsos_err_t which
+ * encapsulates these vectors; see dsos_err.c for its API. When
+ * dsos_req_send() runs, it collects any local errors in req->status
+ * which also is a dsos_err_t. Remote errors can be added by the
+ * caller's callback function; these errors have to be added to
+ * req->status instead of dsos_errno since the latter is a
+ * thread-local global and the callback runs on a different thread and
+ * therefore sees a different dsos_errno. By putting status vectors
+ * into req->status, the application and callback threads can collect
+ * status in one place; then, just before dsos_req_send() returns, it
+ * sets dsos_errno to req->status.
+ *
+ * When dsos_req_send() is done it returns a logical or of DSOS_ERR_LOCAL
+ * or DSOS_ERR_REMOTE to indicate where non-0 status lies.
+ *
+ * The request object is automatically freed after the callback function
+ * is called and dsos_req_send() returns. To keep the dsos_req_t object
+ * accessible longer, use the put/get API:
+ *
+ *   dsos_req_get(req);
  *   dsos_req_put(req);
- *
- * Requests to multiple servers are similar -- a dsos_req_all_t is first
- * allocated, then individual requests to one or more servers can be
- * accessed, then submitted. When submitted, one or more messages are
- * sent out. Response messages are matched up and an internal callback
- * counts them and when the last one is received, the callback specified
- * in the dsos_req_all_new() call is called.
  */
 
 #include <assert.h>
@@ -57,7 +123,8 @@
 
 static struct rbt	req_rbt;
 static pthread_mutex_t	req_rbt_lock;
-static uint64_t		req_next_id = 666;
+static pthread_mutex_t	req_id_lock;
+static uint64_t		req_next_id = 1;
 
 static void		req_all_cb(dsos_req_t *req, size_t len, void *ctxt);
 
@@ -68,100 +135,54 @@ static int req_rbn_cmp_fn(void *tree_key, void *key)
 
 void dsos_req_init(void)
 {
+	pthread_mutex_init(&req_id_lock, 0);
 	pthread_mutex_init(&req_rbt_lock, 0);
 	rbt_init(&req_rbt, req_rbn_cmp_fn);
 }
 
-dsos_req_t *dsos_req_new(dsos_req_cb_t cb, void *ctxt)
+dsos_req_t *dsos_req_new(dsos_req_flags_t flags, dsos_req_cb_t cb, void *ctxt)
 {
+	int		i, num_servers = (flags & DSOS_REQ_ONE) ? 1 : g.num_servers;
 	dsos_req_t	*req;
-	dsosd_msg_t	*msg;
+	dsos_buf_t	buf;
+	dsos_buf_t	null_buf = { NULL, 0, 0, NULL };
 
 	req = malloc(sizeof(dsos_req_t));
-	msg = malloc(zap_max_msg(g.zap));
-	if (!req || !msg)
+	if (!req)
 		dsos_fatal("out of memory");
-	req->msg_len_max = zap_max_msg(g.zap);
-	req->msg_len     = 0;
 	req->refcount    = 1;
-	req->ctxt        = ctxt;
-	req->id          = req_next_id++;
+	req->flags       = flags;
+	req->status      = dsos_err_new();
 	req->cb          = cb;
-	req->msg         = msg;
-	req->resp        = NULL;
-	req->conn        = NULL;
-	req->flags       = 0;
-	req->msg->u.hdr.id     = req->id;
-	req->msg->u.hdr.status = 0;
-	req->msg->u.hdr.flags  = 0;
-	sem_init(&req->sem, 0, 0);
-	dsos_debug("req %p id %ld msg %p ctxt %p\n", req, req->id, req->msg, req->ctxt);
-	return req;
-}
-
-int dsos_req_submit(dsos_req_t *req, dsos_conn_t *conn, size_t len)
-{
-	zap_err_t	zerr;
-	struct req_rbn	*rbn;
-
-	if (len > req->msg_len_max)
-		return ZAP_ERR_PARAMETER;
-
-	req->conn = conn;
-	req->msg->u.hdr.id = req->id;
-
-	rbn = calloc(1, sizeof(struct req_rbn));
-	if (!rbn)
+	req->ctxt        = ctxt;
+	req->ctxt2.ptr1  = NULL;
+	req->ctxt2.ptr2  = NULL;
+	req->num_servers = num_servers;
+	req->num_pend    = 0;
+	req->bufs        = (dsos_req_bufs_t *)malloc(num_servers * sizeof(dsos_req_bufs_t));
+	req->buf         = req->bufs;
+	if (!req->bufs)
 		dsos_fatal("out of memory");
 
-	rbn->rbn.key = (void *)req->id;
-	rbn->req = req;
-
-	pthread_mutex_lock(&req_rbt_lock);
-	rbt_ins(&req_rbt, (void *)rbn);
-	pthread_mutex_unlock(&req_rbt_lock);
-
-	dsos_debug("req %p srv %d %s id %ld conn %p msg %p len %d\n", req,
-		   conn->server_id, dsos_msg_type_to_str(req->msg->u.hdr.type),
-		   req->id, conn, req->msg, len);
-
-	/* Wait for resources if necessary. */
-	sem_wait(&conn->flow_sem);
-
-	zerr = zap_send(conn->ep, req->msg, len);
-	if (zerr != ZAP_ERR_OK)
-		dsos_error("zap_send error %s len %d\n", zap_err_str(zerr), len);
-
-	/*
-	 * Consider req->msg to now be invalid. In this initial implementation, it
-	 * points to a buffer malloc()'d above in dsos_req_new(), but eventually
-	 * it will be a zap send buffer that must not be touched after the zap_send
-	 * is posted.
-	 */
-
-	return zerr;
-}
-
-dsos_req_t *dsos_req_find(dsosd_msg_t *resp)
-{
-	struct req_rbn	*rbn;
-	dsos_req_t	*req;
-
-	pthread_mutex_lock(&req_rbt_lock);
-	rbn = (struct req_rbn *)rbt_find(&req_rbt, (void *)resp->u.hdr.id);
-	if (rbn) {
-		req = rbn->req;
-		if (req == NULL) dsos_fatal("req == NULL\n");
-		req->resp = resp;
-		rbt_del(&req_rbt, (struct rbn *)rbn);
-		free(rbn);
-		pthread_mutex_unlock(&req_rbt_lock);
-		sem_post(&req->conn->flow_sem);
-		return req;
-	} else {
-		pthread_mutex_unlock(&req_rbt_lock);
-		return NULL;
+	pthread_mutex_lock(&req_id_lock);
+	dsos_debug("req %p ids %ld..%ld for %d server%s\n", req,
+		   req_next_id, req_next_id+num_servers-1, num_servers, num_servers==1?"":"s");
+	for (i = 0; i < num_servers; ++i) {
+		buf.free_fn = free;
+		buf.len     = 0;
+		buf.max_len = zap_max_msg(g.zap);
+		buf.msg     = malloc(buf.max_len);
+		buf.msg->u.hdr.id     = req_next_id++;
+		buf.msg->u.hdr.status = 0;
+		buf.msg->u.hdr.flags  = 0;
+		req->bufs[i].send = buf;
+		req->bufs[i].resp = null_buf;
 	}
+	pthread_mutex_unlock(&req_id_lock);
+
+	sem_init(&req->sem, 0, 0);
+
+	return req;
 }
 
 void dsos_req_get(dsos_req_t *req)
@@ -171,185 +192,144 @@ void dsos_req_get(dsos_req_t *req)
 
 void dsos_req_put(dsos_req_t *req)
 {
+	int	i;
+
 	if (!ods_atomic_dec(&req->refcount)) {
-		dsos_debug("req %p msg %p resp %p flags %d freed\n", req, req->msg, req->resp, req->flags);
-		if (req->msg)
-			free(req->msg);
-		if (req->resp && (req->flags & REQ_RESPONSE_COPIED))
-			free(req->resp);
+		dsos_debug("freeing req %p flags 0x%x num_servers %d\n", req, req->flags, req->num_servers);
+		for (i = 0; i < req->num_servers; ++i) {
+			if (req->bufs[i].send.free_fn && req->bufs[i].send.msg)
+				req->bufs[i].send.free_fn(req->bufs[i].send.msg);
+			if (req->bufs[i].resp.free_fn && req->bufs[i].resp.msg)
+				req->bufs[i].resp.free_fn(req->bufs[i].resp.msg);
+		}
+		free(req->bufs);
 		free(req);
 	}
 }
 
-dsos_req_all_t *dsos_req_all_new(dsos_req_all_cb_t cb, void *ctxt)
+void dsos_req_set_server(dsos_req_t *req, int server_num)
 {
-	int		i;
-	dsos_req_all_t	*req_all;
-	dsos_req_t	**reqs;
-
-	req_all = calloc(1, sizeof(dsos_req_all_t));
-	reqs    = malloc(g.num_servers * sizeof(dsos_req_t *));
-	if (!req_all || !reqs)
-		dsos_fatal("out of memory");
-	req_all->num_servers   = g.num_servers;
-	req_all->refcount      = 1;
-	req_all->ctxt          = ctxt;
-	req_all->cb            = cb;
-	req_all->reqs          = reqs;
-	req_all->num_reqs_pend = 0;
-	sem_init(&req_all->sem, 0, 0);
-	for (i = 0; i < g.num_servers; ++i) {
-		req_all->reqs[i] = dsos_req_new(req_all_cb, req_all);
-		req_all->reqs[i]->req_all = req_all;
-	}
-
-	dsos_debug("req_all %p\n", req_all);
-
-	return req_all;
+	req->server_num = server_num;
 }
 
-dsos_req_all_t *dsos_req_all_async_new(dsos_req_cb_t cb, void *ctxt)
+int dsos_req_send(dsos_req_flags_t flags, dsos_req_t *req)
 {
-	int		i;
-	dsos_req_all_t	*req_all;
-	dsos_req_t	**reqs;
+	int		i, n, server_num;
+	zap_err_t	zerr;
+	zap_ep_t	ep;
+	dsos_conn_t	*conn;
+	struct req_rbn	*rbn;
 
-	req_all = calloc(1, sizeof(dsos_req_all_t));
-	reqs    = malloc(g.num_servers * sizeof(dsos_req_t *));
-	if (!req_all || !reqs)
-		dsos_fatal("out of memory");
-	req_all->num_servers   = g.num_servers;
-	req_all->refcount      = 1;
-	req_all->ctxt          = ctxt;
-	req_all->cb            = NULL;
-	req_all->reqs          = reqs;
-	req_all->num_reqs_pend = 0;
-	sem_init(&req_all->sem, 0, 0);
-	for (i = 0; i < g.num_servers; ++i) {
-		req_all->reqs[i] = dsos_req_new(cb, ctxt);
-		req_all->reqs[i]->req_all = req_all;
-	}
-
-	dsos_debug("req_all %p\n", req_all);
-
-	return req_all;
-}
-
-dsos_req_all_t *dsos_req_all_sparse_new(dsos_req_all_cb_t cb, void *ctxt)
-{
-	int		i;
-	dsos_req_all_t	*req_all;
-	dsos_req_t	**reqs;
-
-	req_all = calloc(1, sizeof(dsos_req_all_t));
-	reqs    = calloc(g.num_servers, sizeof(dsos_req_t *));
-	if (!req_all || !reqs)
-		dsos_fatal("out of memory");
-	req_all->refcount      = 1;
-	req_all->ctxt          = ctxt;
-	req_all->cb            = cb;
-	req_all->reqs          = reqs;
-	req_all->num_reqs_pend = 0;
-	req_all->num_servers   = 0;
-	sem_init(&req_all->sem, 0, 0);
-
-	dsos_debug("req_all %p\n", req_all);
-
-	return req_all;
-}
-
-dsos_req_t *dsos_req_all_add_server(dsos_req_all_t *req_all, int server_num)
-{
-	if (req_all->reqs[server_num])
-		return req_all->reqs[server_num];
-
-	++req_all->num_servers;
-
-	dsos_debug("req_all %p add server %d num_servers %d\n",
-		   req_all, server_num, req_all->num_servers);
-
-	req_all->reqs[server_num] = dsos_req_new(req_all_cb, req_all);
-	if (!req_all->reqs[server_num])
-		dsos_fatal("out of memory\n");
-	req_all->reqs[server_num]->req_all = req_all;
-
-	return req_all->reqs[server_num];
-}
-
-void dsos_req_all_put(dsos_req_all_t *req_all)
-{
-	int	i;
-
-	if (!ods_atomic_dec(&req_all->refcount)) {
-		dsos_debug("req_all %p freeing, %d servers\n", req_all, req_all->num_servers);
-		for (i = 0; i < g.num_servers; ++i) {
-			if (req_all->reqs[i])
-				dsos_req_put(req_all->reqs[i]);
-		}
-		free(req_all->reqs);
-		free(req_all);
-	}
-}
-
-int dsos_req_all_submit(dsos_req_all_t *req_all, size_t len)
-{
-	int		i, ret = 0;
-	dsos_req_t	*req;
-	dsosd_msg_t	*msg;
-
-	dsos_debug("req_all %p for %d servers len %d\n", req_all, req_all->num_servers, len);
-
-	req_all->num_reqs_pend = req_all->num_servers;
-	dsos_err_clear();
-	for (i = 0; i < g.num_servers; ++i) {
-		req = req_all->reqs[i];
-		if (!req || (req->msg->u.hdr.type == DSOSD_MSG_INVALID))
-			continue;
-		if (!req->msg_len)
-			req->msg_len = len;
-		ret = dsos_req_submit(req_all->reqs[i], &g.conns[i], req->msg_len);
-		if (ret)
-			dsos_fatal("ret %d\n", ret);
-		dsos_err_set(i, ret);
-	}
-	return dsos_err_status();
-}
-
-static void req_all_cb(dsos_req_t *req, size_t len, void *ctxt)
-{
-	dsosd_msg_t	*resp;
-	dsos_req_all_t	*req_all = (dsos_req_all_t *)ctxt;
+	req->flags   |= flags;
+	req->num_pend = req->num_servers;
 
 	/*
-	 * The req->resp response buffer from zap is invalid after
-	 * this function returns, so copy it.
+	 * This reference must be taken to keep the req from being freed
+	 * until after the sem_wait() calls done below return.
 	 */
-	if (req->resp && len) {
-		resp = (dsosd_msg_t *)malloc(len);
-		if (!resp)
-			dsos_fatal("out of memory\n");
-		memcpy(resp, req->resp, len);
-		req->flags |= REQ_RESPONSE_COPIED;
-		req->resp = resp;
-	} else
-		req->resp = NULL;
+	dsos_req_get(req);
 
-#ifdef DSOS_DEBUG
-	if (req->resp) {
-		dsos_debug("req %p req_all %p pend %d len %d ctxt %p msg %p id %ld "
-			   "type %d status %d copied to %p\n",
-			   req, req_all, req_all->num_reqs_pend,
-			   len, ctxt, req->msg, req->resp->u.hdr.id,
-			   req->resp->u.hdr.type, req->resp->u.hdr.status, req->resp);
-	} else {
-		dsos_debug("req %p req_all %p len %d ctxt %p flushed\n",
-			   req, req_all, len, ctxt);
-	}
-#endif
+	for (i = 0; i < req->num_servers; ++i) {
+		if (req->bufs[i].send.len > req->bufs[i].send.max_len) {
+			dsos_err_set_local(req->status, i, ZAP_ERR_PARAMETER);
+			continue;
+		}
 
-	if (!ods_atomic_dec(&req_all->num_reqs_pend)) {
-		req_all->cb(req_all, req_all->ctxt);
-		/* Note: the callback above is responsible for the dsos_req_all_put(req_all). */
+		server_num = (req->num_servers == 1) ? req->server_num : i;
+		conn = &g.conns[server_num];
+
+		rbn = calloc(1, sizeof(struct req_rbn));
+		if (!rbn)
+			dsos_fatal("out of memory");
+		rbn->rbn.key = (void *)req->bufs[i].send.msg->u.hdr.id;
+		rbn->req = req;
+
+		pthread_mutex_lock(&req_rbt_lock);
+		rbt_ins(&req_rbt, (void *)rbn);
+		pthread_mutex_unlock(&req_rbt_lock);
+
+		dsos_debug("req %p server %d %s id %ld ep %p msg %p len %d\n", req, server_num,
+			   dsos_msg_type_to_str(req->bufs[i].send.msg->u.hdr.type),
+			   req->bufs[i].send.msg->u.hdr.id,
+			   conn->ep, req->bufs[i].send.msg, req->bufs[i].send.len);
+
+		/* Wait for resources if necessary. */
+		sem_wait(&conn->flow_sem);
+
+		zerr = zap_send(conn->ep, req->bufs[i].send.msg, req->bufs[i].send.len);
+		if (zerr != ZAP_ERR_OK)
+			dsos_error("send err %d (%s) server %d ep %p len %d\n",
+				   zerr, zap_err_str(zerr), server_num, conn->ep, req->bufs[i].send.len);
+		dsos_err_set_local(req->status, i, zerr);
 	}
+	if (dsos_err_status(req->status) & DSOS_ERR_LOCAL) {
+		dsos_req_put(req);
+		return DSOS_ERR_LOCAL;
+	}
+
+	if (req->flags & DSOS_REQ_WAIT) {
+		dsos_debug("waiting\n");
+		for (i = 0; i < req->num_servers; ++i)
+			sem_wait(&req->sem);
+		dsos_debug("wait complete\n");
+	}
+
+	dsos_err_free(dsos_errno);
+	dsos_errno = req->status;
+
+	dsos_req_put(req);  /* free the ref taken above */
+
+	return 0;
+}
+
+void dsos_req_handle_resp(dsos_conn_t *conn, dsosd_msg_t *resp, size_t len)
+{
+	int		first, last, responses_left;
+	uint32_t	flags;
+	struct req_rbn	*rbn;
+	dsos_req_t	*req;
+	dsos_req_bufs_t	*buf;
+
+	pthread_mutex_lock(&req_rbt_lock);
+	rbn = (struct req_rbn *)rbt_find(&req_rbt, (void *)resp->u.hdr.id);
+	if (!rbn) {
+		pthread_mutex_unlock(&req_rbt_lock);
+		dsos_fatal("no req for id %ld from server %d\n", resp->u.hdr.id, conn->server_id);
+	}
+	rbt_del(&req_rbt, (struct rbn *)rbn);
+	pthread_mutex_unlock(&req_rbt_lock);
+
+	sem_post(&conn->flow_sem);
+
+	req = rbn->req;
+	if (req->num_servers == 1)
+		buf = req->buf;
+	else
+		buf = &req->bufs[conn->server_id];
+
+	buf->resp.msg     = resp;
+	buf->resp.free_fn = NULL;
+	buf->resp.max_len = len;
+	buf->resp.len     = len;
+
+	responses_left = ods_atomic_dec(&req->num_pend);
+
+	dsos_debug("msg %s id %ld status %d from server %d resp %p/%d %d responses of %d left\n",
+		   dsos_msg_type_to_str(resp->u.hdr.type), resp->u.hdr.id, resp->u.hdr.status,
+		   conn->server_id, resp, len, responses_left, req->num_servers);
+
+	first = (responses_left == req->num_servers-1);
+	last  = (responses_left == 0);
+
+	flags = 0;
+	if (first) flags |= DSOS_REQ_CB_FIRST;
+	if (last)  flags |= DSOS_REQ_CB_LAST;
+
+	if ((flags & req->flags) || DSOS_REQ_CB_ALL)
+		req->cb(req, flags, &buf->resp, conn->server_id, req->ctxt);
+	sem_post(&req->sem);
+	if (last)
+		dsos_req_put(req);
+	free(rbn);
 	dsos_debug("done\n");
 }

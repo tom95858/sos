@@ -659,23 +659,25 @@ int deserialize_buf(char **val_data, char **pbuf, size_t *psz)
 
 void rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len)
 {
+	int		ret = ENOENT;
 	sos_t		cont;
-	sos_obj_t	sos_obj;
+	sos_obj_t	sos_obj = NULL;
 	sos_part_t	primary;
 	dsosd_req_t	*req;
 	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
 
 	cont = dsosd_handle_to_ptr(client, msg->cont_handle);
 	if (!cont) {
-		dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_GET_RESP, msg->hdr.id,
-					       sizeof(dsosd_msg_obj_get_resp_t), EBADF);
-		return;
+		ret = EBADF;
+		goto out;
 	}
 
 	/* Use the ODS from the primary partition in the given container. */
 	primary = __sos_primary_obj_part(cont);
-	if (!primary)
-		return;
+	if (!primary) {
+		ret = ENOENT;
+		goto out;
+	}
 	msg->obj_id.as_ref.ref.ods = sos_part_id(primary);
 
 	sos_obj = sos_ref_as_obj(cont, msg->obj_id.as_ref);
@@ -683,12 +685,12 @@ void rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len)
 	dsosd_debug("ep %p obj_id %08lx%08lx sos_obj %p\n", ep,
 		    msg->obj_id.as_ref.ref.ods, msg->obj_id.as_ref.ref.obj,
 		    sos_obj);
-
+ out:
 	if (sos_obj)
 		dsosd_req_complete_with_obj(ep, sos_obj, DSOSD_MSG_OBJ_GET_RESP, msg);
 	else
 		dsosd_req_complete_with_status(client, DSOSD_MSG_OBJ_GET_RESP, msg->hdr.id,
-					       sizeof(dsosd_msg_obj_get_resp_t), ENOENT);
+					       sizeof(dsosd_msg_obj_get_resp_t), ret);
 }
 
 void rpc_handle_iterator_close(zap_ep_t ep, dsosd_msg_iterator_close_req_t *msg, size_t len)
@@ -765,9 +767,8 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 
 	iter = dsosd_handle_to_ptr(client, msg->iter_handle);
 	if (!iter) {
-		dsosd_req_complete_with_status(client, DSOSD_MSG_ITERATOR_STEP_RESP, msg->hdr.id,
-					       sizeof(dsosd_msg_iterator_step_resp_t), EBADF);
-		return;
+		ret = EBADF;
+		goto out;
 	}
 	switch (msg->op) {
 	    case DSOSD_MSG_ITER_OP_BEGIN:
@@ -778,9 +779,6 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 		break;
 	    case DSOSD_MSG_ITER_OP_NEXT:
 		ret = sos_iter_next(iter);
-		break;
-	    case DSOSD_MSG_ITER_OP_PREV:
-		ret = sos_iter_prev(iter);
 		break;
 	    case DSOSD_MSG_ITER_OP_FIND:
 		ret = sos_iter_find(iter, key);
@@ -796,7 +794,7 @@ void rpc_handle_iterator_step(zap_ep_t ep, dsosd_msg_iterator_step_req_t *msg, s
 	}
 	dsosd_debug("ep %d op %d iter %p/%p key %p key_len %d ret %d\n", ep, msg->op,
 		    msg->iter_handle, iter, key, key_len, ret);
-
+ out:
 	if (sos_obj)
 		dsosd_req_complete_with_obj(ep, sos_obj, DSOSD_MSG_ITERATOR_STEP_RESP, msg);
 	else

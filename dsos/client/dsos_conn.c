@@ -85,8 +85,6 @@ const char *dsos_msg_type_to_str(int id)
 
 static void client_cb(zap_ep_t ep, zap_event_t ev)
 {
-	dsos_req_t	*req;
-	dsosd_msg_t	*resp;
 	dsos_conn_t	*conn = (dsos_conn_t *)zap_get_ucontext(ep);
 
 	switch (ev->type) {
@@ -120,23 +118,7 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_RECV_COMPLETE:
-		resp = (dsosd_msg_t *)ev->data;
-		req = dsos_req_find(resp);
-		dsos_debug("ZAP_EVENT_RECV_COMPLETE %s srv %d req %p resp %p len %d "
-			   "id %ld type %d status %d flags 0x%x conn %p\n",
-			   dsos_msg_type_to_str(resp->u.hdr.type), conn->server_id,
-			   req, resp, ev->data_len, resp->u.hdr.id, resp->u.hdr.type,
-			   resp->u.hdr.status, resp->u.hdr.flags, conn);
-		if (!req)
-			dsos_fatal("no req for id %ld from server %d\n", resp->u.hdr.id, conn->server_id);
-		// On send, req->msg points to a send buffer (malloc'd by dsos_req_new but
-		// eventually to be provided by zap_send_alloc()) which is invalid after the
-		// send is posted by dsos_req_submit(). Here, req->resp points to the response
-		// that just came in. That buffer is invalid after the callback below returns.
-		req->resp_len = ev->data_len;
-		req->cb(req, ev->data_len, req->ctxt);
-		// Don't be tempted to call dsos_req_put() now. For a vector-RPC req it needs
-		// to live until the dsos_req_all_t is complete.
+		dsos_req_handle_resp(conn, (dsosd_msg_t *)ev->data, ev->data_len);
 		break;
 	    case ZAP_EVENT_READ_COMPLETE:
 	    case ZAP_EVENT_WRITE_COMPLETE:
