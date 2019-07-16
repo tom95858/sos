@@ -15,11 +15,5 @@ endif
 
 AM_CPPFLAGS = $(AM_CFLAGS)
 
-dsos_cmd_SOURCES = dsos_cmd.c
-dsos_cmd_LDADD = \
-	$(top_builddir)/dsos/client/libdsos.la     \
-	$(top_builddir)/sos/src/libsos.la          \
-	$(top_builddir)/util/json/libjson_util.la  \
-	$(top_builddir)/util/mmalloc/libmmalloc.la \
-	@LIBZAP_LIBDIR@/libzap.la -lssl
-bin_PROGRAMS += dsos_cmd
+libpack_la_SOURCES = dsos_pack.c
+lib_LTLIBRARIES = libpack.la

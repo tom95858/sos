@@ -204,7 +204,7 @@ void do_ping()
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
-		ret = dsos_ping_one(server_num, &stats);
+		ret = dsos_ping_one(server_num, &stats, 0);
 		if (ret) {
 			printf("error %d\n", ret);
 			fflush(stdout);
@@ -229,7 +229,7 @@ void do_init()
 	if (!cont) {
 		cont = create_cont(cont_nm, 0755);
 		if (!cont) {
-			fprintf(stderr, "could not create container\n");
+			dsos_perror("could not create container\n");
 			exit(1);
 		}
 		if (verbose)
@@ -237,32 +237,32 @@ void do_init()
 	}
 	schema = dsos_schema_by_name(cont, "test");
 	if (!schema) {
-		fprintf(stderr, "could not open schema 'test'\n");
+		dsos_perror("could not open schema 'test'\n");
 		exit(1);
 	}
 	attr_seq = sos_schema_attr_by_name(schema->sos_schema, "seq");
 	if (!attr_seq) {
-		fprintf(stderr, "could not get attr seq from schema\n");
+		dsos_perror("could not get attr seq from schema\n");
 		exit(1);
 	}
 	attr_hash = sos_schema_attr_by_name(schema->sos_schema, "hash");
 	if (!attr_hash) {
-		fprintf(stderr, "could not get attr hash from schema\n");
+		dsos_perror("could not get attr hash from schema\n");
 		exit(1);
 	}
 	attr_data = sos_schema_attr_by_name(schema->sos_schema, "data");
 	if (!attr_data) {
-		fprintf(stderr, "could not get attr data from schema\n");
+		dsos_perror("could not get attr data from schema\n");
 		exit(1);
 	}
 	attr_int1 = sos_schema_attr_by_name(schema->sos_schema, "int1");
 	if (!attr_int1) {
-		fprintf(stderr, "could not get attr int1 from schema\n");
+		dsos_perror("could not get attr int1 from schema\n");
 		exit(1);
 	}
 	attr_int2 = sos_schema_attr_by_name(schema->sos_schema, "int2");
 	if (!attr_int2) {
-		fprintf(stderr, "could not get attr int2 from schema\n");
+		dsos_perror("could not get attr int2 from schema\n");
 		exit(1);
 	}
 }
@@ -361,7 +361,7 @@ void do_obj_creates()
 	for (i = 0; i < num_iters; ++i) {
 		obj = dsos_obj_alloc(schema);
 		if (!obj) {
-			fprintf(stderr, "could not create object %d", i);
+			dsos_perror("could not create object %d", i);
 			exit(1);
 		}
 
@@ -375,7 +375,7 @@ void do_obj_creates()
 
 		ret = dsos_obj_create(obj, obj_cb, (void *)(uintptr_t)i);
 		if (ret) {
-			fprintf(stderr, "dsos_obj_create %d\n", ret);
+			dsos_perror("dsos_obj_create %d\n", ret);
 			exit(1);
 		}
 

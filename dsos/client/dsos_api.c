@@ -2,194 +2,202 @@
 
 static int	iter_rbn_cmp_fn(void *tree_key, void *key);
 
-int dsos_ping_one(int server_num, struct dsos_ping_stats *stats)
+static uint64_t nsecs_now()
 {
-	int			ret;
-	rpc_ping_in_t		args_in;
-	rpc_ping_out_t		args_out;
+	struct timespec	ts;
 
-	args_in.server_num = server_num;
-	args_in.stats      = stats;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return ts.tv_sec * 1.0e+9 + ts.tv_nsec;
+}
 
-	return dsos_rpc_ping_one(&args_in, &args_out);
+int dsos_ping_one(int server_num, struct dsos_ping_stats *stats, int debug)
+{
+	int		len, ret;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ONE, DSOS_RPC_PING);
+
+	dsos_rpc_pack_u32_one(rpc, debug);
+
+	ret = dsos_rpc_send_one(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES, server_num);
+	if (ret == 0)
+		dsos_rpc_unpack_buf_and_copy(rpc, stats, &len);
+
+	dsos_rpc_put(rpc);
+	return ret;
+}
+
+static void ping_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t *resp, int server_num, void *ctxt)
+{
+	uint64_t		then = *(uint64_t *)rpc->ctxt2.ptr1;
+	uint64_t		now  = nsecs_now();
+	struct dsos_ping_stats	*statsp = ctxt;
+
+	dsos_rpc_unpack_buf_and_copy_one(rpc, server_num, &statsp[server_num], NULL);
+	statsp[server_num].nsecs = now - then;
 }
 
 int dsos_ping_all(struct dsos_ping_stats **statsp, int debug)
 {
-	int                     ret;
-	rpc_ping_in_t		args_in;
-	rpc_ping_out_t          args_outp;
+	uint64_t	now;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_PING);
 
-	args_in.debug = debug;
+	dsos_rpc_pack_u32_all(rpc, debug);
 
-	ret = dsos_rpc_ping_all(&args_in, &args_outp);
-
-	*statsp = args_outp.stats;
-
-	return ret;
+	*statsp = (struct dsos_ping_stats *)dsos_malloc(g.num_servers *
+							sizeof(struct dsos_ping_stats));
+	now = nsecs_now();
+	rpc->ctxt2.ptr1 = &now;
+	return dsos_rpc_send_cb(rpc, DSOS_RPC_WAIT | DSOS_RPC_CB_ALL | DSOS_RPC_PUT, ping_cb, *statsp);
 }
 
 int dsos_container_new(const char *path, int mode)
 {
-	rpc_container_new_in_t		args_in;
-	rpc_container_new_out_t		args_out;
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_CONT_NEW);
 
-	strncpy(args_in.path, path, sizeof(args_in.path));
-	args_in.mode = mode;
+	dsos_rpc_pack_u32_all(rpc, mode);
+	dsos_rpc_pack_str_all(rpc, path);
 
-	return dsos_rpc_container_new(&args_in, &args_out);
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
 dsos_t *dsos_container_open(const char *path, sos_perm_t perms)
 {
-	int				ret;
-	dsos_t				*cont;
-	rpc_container_open_in_t		args_in;
-	rpc_container_open_out_t	args_out;
+	int		ret;
+	dsos_t		*cont = NULL;
+	dsos_rpc_t	*rpc  = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_CONT_OPEN);
 
-	strncpy(args_in.path, path, sizeof(args_in.path));
-	args_in.perms = perms;
+	dsos_rpc_pack_u32_all(rpc, perms);
+	dsos_rpc_pack_str_all(rpc, path);
 
-	ret = dsos_rpc_container_open(&args_in, &args_out);
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
-		return NULL;
+		goto out;
 
-	cont = (dsos_t *)malloc(sizeof(dsos_t));
-	if (!cont)
-		dsos_fatal("out of memory\n");
-	cont->handles = args_out.handles;
+	cont = (dsos_t *)dsos_malloc(sizeof(dsos_t));
 
+	cont->handles = dsos_rpc_unpack_handles(rpc);
+ out:
+	dsos_rpc_put(rpc);
 	return cont;
 }
 
 int dsos_container_close(dsos_t *cont)
 {
-	int				ret;
-	rpc_container_close_in_t	args_in;
-	rpc_container_close_out_t	args_out;
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_CONT_CLOSE);
 
-	args_in.handles = cont->handles;
-
-	ret = dsos_rpc_container_close(&args_in, &args_out);
+	dsos_rpc_pack_handles(rpc, cont->handles);
 
 	free(cont->handles);
 	free(cont);
 
-	return ret;
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
 dsos_schema_t *dsos_schema_by_name(dsos_t *cont, const char *name)
 {
-	int				ret;
-	dsos_schema_t			*schema;
-	sos_schema_template_t		template;
-	rpc_schema_by_name_in_t		args_in;
-	rpc_schema_by_name_out_t	args_out;
+	int		i, ret;
+	dsos_schema_t	*schema = NULL;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_BY_NAME);
 
-	strncpy(args_in.name, name, sizeof(args_in.name));
-	args_in.cont_handles = cont->handles;
+	dsos_rpc_pack_handles(rpc, cont->handles);
+	dsos_rpc_pack_str_all(rpc, name);
 
-	ret = dsos_rpc_schema_by_name(&args_in, &args_out);
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
-		return NULL;
+		goto out;
 
-	template = dsos_rpc_deserialize_schema_template(args_out.templ,
-							sizeof(args_out.templ));
+	schema = (dsos_schema_t *)dsos_malloc(sizeof(dsos_schema_t));
 
-	schema = (dsos_schema_t *)malloc(sizeof(dsos_schema_t));
-	if (!schema)
-		dsos_fatal("out of memory\n");
-	schema->handles    = args_out.handles;
-	schema->sos_schema = sos_schema_from_template(template);
+	schema->handles    = dsos_rpc_unpack_handles(rpc);
+	schema->sos_schema = dsos_rpc_unpack_schema_one(rpc, 0);
 	schema->cont       = cont;
-
-	free(template);
+#if 1
+	/* Enable for debug: verify that all returned schema are identical. */
+	for (i = 0; i < g.num_servers; ++i) {
+		void *buf1 = rpc->bufs[0].resp.msg + 1;
+		void *buf2 = rpc->bufs[i].resp.msg + 1;
+		if (memcmp(buf1, buf2, rpc->bufs[0].resp.len - sizeof(dsos_msg_hdr_t)))
+			dsos_error("schema from servers 0 and %d differ\n", i);
+	}
+#endif
+ out:
+	dsos_rpc_put(rpc);
 	return schema;
 }
 
 int dsos_schema_add(dsos_t *cont, dsos_schema_t *schema)
 {
-	rpc_schema_add_in_t		args_in;
-	rpc_schema_add_out_t		args_out;
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_ADD);
 
-	args_in.cont_handles   = cont->handles;
-	args_in.schema_handles = schema->handles;
+	dsos_rpc_pack_handles(rpc, cont->handles);
+	dsos_rpc_pack_handles(rpc, schema->handles);
 
-	return dsos_rpc_schema_add(&args_in, &args_out);
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
 dsos_schema_t *dsos_schema_from_template(sos_schema_template_t t)
 {
-	int					ret;
-	size_t					template_sz;
-	void					*p;
-	dsos_schema_t				*schema;
-	rpc_schema_from_template_in_t		args_in;
-	rpc_schema_from_template_out_t		args_out;
+	int		ret;
+	sos_schema_t	sos_schema;
+	dsos_schema_t	*schema = NULL;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_FROM_TEMPLATE);
 
-	template_sz = sizeof(args_in.templ);
-	p = dsos_rpc_serialize_schema_template(t, args_in.templ, &template_sz);
-	if (!p)
-		return NULL; // too large to serialize
-	args_in.len = template_sz;
-	ret = dsos_rpc_schema_from_template(&args_in, &args_out);
+	sos_schema = sos_schema_from_template(t);
+
+	dsos_rpc_pack_schema_all(rpc, sos_schema);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
-		return NULL;
+		goto out;
 
-	schema = (dsos_schema_t *)malloc(sizeof(dsos_schema_t));
-	if (!schema)
-		dsos_fatal("out of memory\n");
-	schema->handles    = args_out.handles;
-	schema->sos_schema = sos_schema_from_template(t);
+	schema = (dsos_schema_t *)dsos_malloc(sizeof(dsos_schema_t));
 
+	schema->handles = dsos_rpc_unpack_handles(rpc);
+	schema->sos_schema = sos_schema;
+ out:
+	dsos_rpc_put(rpc);
 	return schema;
 }
 
 int dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path)
 {
-	rpc_part_create_in_t		args_in;
-	rpc_part_create_out_t		args_out;
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_PART_CREATE);
 
-	if (!part_path)
-		part_path = "";  // part_path is an optional arg
-	strncpy(args_in.name, part_name, sizeof(args_in.name));
-	strncpy(args_in.path, part_path, sizeof(args_in.path));
-	args_in.cont_handles = cont->handles;
+	dsos_rpc_pack_handles(rpc, cont->handles);
+	dsos_rpc_pack_str_all(rpc, part_name);
+	dsos_rpc_pack_str_all(rpc, part_path);
 
-	return dsos_rpc_part_create(&args_in, &args_out);
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
 dsos_part_t *dsos_part_find(dsos_t *cont, const char *name)
 {
-	int				ret;
-	dsos_part_t			*part;
-	rpc_part_find_in_t		args_in;
-	rpc_part_find_out_t		args_out;
+	int		ret;
+	dsos_part_t	*part;
+	dsos_rpc_t	*rpc  = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_PART_FIND);
 
-	args_in.cont_handles = cont->handles;
-	strncpy(args_in.name, name, sizeof(args_in.name));
+	dsos_rpc_pack_handles(rpc, cont->handles);
+	dsos_rpc_pack_str_all(rpc, name);
 
-	ret = dsos_rpc_part_find(&args_in, &args_out);
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
-		return NULL;
+		goto out;
 
-	part = (dsos_part_t *)malloc(sizeof(dsos_part_t));
-	if (!part)
-		dsos_fatal("out of memory\n");
-	part->handles = args_out.handles;
+	part = (dsos_part_t *)dsos_malloc(sizeof(dsos_part_t));
 
+	part->handles = dsos_rpc_unpack_handles(rpc);
+ out:
+	dsos_rpc_put(rpc);
 	return part;
 }
 
 int dsos_part_state_set(dsos_part_t *part, sos_part_state_t new_state)
 {
-	rpc_part_set_state_in_t		args_in;
-	rpc_part_set_state_out_t	args_out;
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_PART_SET_STATE);
 
-	args_in.handles   = part->handles;
-	args_in.new_state = new_state;
+	dsos_rpc_pack_u32_all(rpc, new_state);
+	dsos_rpc_pack_handles(rpc, part->handles);
 
-	return dsos_rpc_part_set_state(&args_in, &args_out);
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
 static int iter_rbn_cmp_fn(void *tree_key, void *key)
@@ -232,7 +240,7 @@ static sos_obj_t iter_rbt_min(dsos_iter_t *iter)
 		sos_value_free(rbn->rbn.key);
 		free(rbn);
 	} else
-		dsos_debug("iter %p rbt empty\n");
+		dsos_debug("iter %p rbt empty\n", iter);
 
 	return obj;
 }
@@ -256,7 +264,7 @@ static int iter_reset(dsos_iter_t *iter)
 	sos_obj_t	obj;
 
 	/* Ignore the response to any pending prefetch. */
-	iter->prefetch_req = NULL;
+	iter->prefetch_rpc = NULL;
 
 	/* Clear out the rbt. */
 	while (obj = iter_rbt_min(iter))
@@ -269,23 +277,22 @@ static int iter_reset(dsos_iter_t *iter)
 	return 0;
 }
 
-static void iter_prefetch_cb(dsos_req_t *req, uint32_t flags, void *ctxt1, void *ctxt2)
+static void iter_prefetch_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t *resp, int server_num, void *ctxt)
 {
-	dsos_iter_t	*iter = (dsos_iter_t *)ctxt1;
-	sos_obj_t	obj   = (sos_obj_t)ctxt2;
+	dsos_iter_t	*iter = (dsos_iter_t *)ctxt;
+	sos_obj_t	obj   = (sos_obj_t)rpc->ctxt2.ptr1;
 
 	pthread_mutex_lock(&iter->lock);
 
-	dsos_debug("got obj %p/%08lx%08lx iter %p done %d req %p prefetch_req %p status %d from server %d\n",
-		   obj, obj->obj_ref.ref.ods, obj->obj_ref.ref.obj,
-		   iter, iter->done, req, iter->prefetch_req, req->buf->resp.msg->u.hdr.status,
-		   req->server_num);
+	dsos_debug("rpc %p got obj %p iter %p done %d prefetch_rpc %p status %d from server %d\n",
+		   rpc, obj, iter, iter->done, iter->prefetch_rpc, resp->msg->hdr.status,
+		   rpc->server_num);
 
 	if (iter->done) {
 		pthread_mutex_unlock(&iter->lock);
 		return;
 	}
-	if (req != iter->prefetch_req) {
+	if (rpc != iter->prefetch_rpc) {
 		/* This response has been cancelled. Ignore it. */
 		dsos_debug("ignoring\n");
 		sos_obj_put(obj);
@@ -293,146 +300,155 @@ static void iter_prefetch_cb(dsos_req_t *req, uint32_t flags, void *ctxt1, void 
 		return;
 	}
 
-	switch (req->buf->resp.msg->u.hdr.status) {
+	switch (dsos_err_get_remote(rpc->status, server_num)) {
 	    case 0:
+		obj->obj_ref = dsos_rpc_unpack_obj_id(rpc);
+		if (dsos_rpc_unpack_u32(rpc) & DSOS_RPC_FLAGS_INLINE)
+			dsos_rpc_unpack_obj(rpc, obj);
 		iter_insert_obj(iter, obj);
 		iter->status = 0;
 		break;
 	    case ENOENT:
+		dsos_debug("iter %p server %d is done\n", iter, server_num);
 		sos_obj_put(obj);
+		dsos_err_set_remote(rpc->status, server_num, 0);
 		iter->status = 0;
 		break;
 	    default:
 		sos_obj_put(obj);
-		iter->status = req->buf->resp.msg->u.hdr.status;
+		iter->status = dsos_err_get_remote(rpc->status, server_num);
+		dsos_error("rpc %p iter %p status %d from server %d\n",
+			   rpc, iter, iter->status, server_num);
 		break;
 	}
 
 	dsos_debug("signalling\n");
-	iter->prefetch_req = NULL;
+	iter->prefetch_rpc = NULL;
 	pthread_cond_signal(&iter->prefetch_complete);
 	pthread_mutex_unlock(&iter->lock);
 }
 
 static int iter_prefetch(dsos_iter_t *iter, int server_num)
 {
-	sos_obj_t		obj;
-	rpc_iter_step_one_in_t	args_in;
+	sos_obj_t	obj;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ONE, DSOS_RPC_ITER_STEP);
 
 	if (iter->done)
 		return 0;
 
-	obj = sos_obj_malloc(iter->schema->sos_schema);
-	if (!obj)
-		return ENOMEM;
-	obj->ctxt = iter->schema;
+	obj = dsos_obj_malloc(iter->schema);
 
-	args_in.op          = DSOSD_MSG_ITER_OP_NEXT;
-	args_in.iter_handle = iter->handles[server_num];
-	args_in.sos_obj     = obj;
-	args_in.server_num  = server_num;
-	args_in.iter        = iter;
-	args_in.cb          = iter_prefetch_cb;
+	dsos_rpc_pack_u32_one(rpc, DSOS_RPC_ITER_OP_NEXT);
+	dsos_rpc_pack_handle(rpc, iter->handles[server_num]);
+	dsos_rpc_pack_obj_ptr(rpc, obj);
+	dsos_rpc_pack_key_one(rpc, NULL);
+	dsos_rpc_set_server(rpc, server_num);
 
-	iter->prefetch_req = dsos_rpc_iter_step_one_async(&args_in);
-	if (!iter->prefetch_req)
-		return 1;
+	iter->prefetch_rpc = rpc;
+	rpc->ctxt2.ptr1    = obj;
 
-	dsos_debug("from server %d into obj %p iter %p req %p\n",
-		   server_num, obj, iter, iter->prefetch_req);
+	dsos_debug("from server %d into obj %p iter %p prefetch_rpc %p\n",
+		   server_num, obj, iter, iter->prefetch_rpc);
 
-	return 0;
+	return dsos_rpc_send_cb(rpc, DSOS_RPC_CB | DSOS_RPC_PUT, iter_prefetch_cb, iter);
 }
 
 dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
 {
-	int			i, ret;
-	dsos_iter_t		*iter;
-	rpc_iter_new_in_t	args_in;
-	rpc_iter_new_out_t	args_out;
+	int		ret;
+	dsos_iter_t	*iter = NULL;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_NEW);
 
-	args_in.schema_handles = schema->handles;
-	args_in.attr = attr;
+	dsos_rpc_pack_u32_all(rpc, sos_attr_id(attr));
+	dsos_rpc_pack_handles(rpc, schema->handles);
 
-	ret = dsos_rpc_iter_new(&args_in, &args_out);
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
-		return NULL;
+		goto out;
 
-	iter = (dsos_iter_t *)malloc(sizeof(dsos_iter_t));
-	if (!iter)
-		dsos_fatal("out of memory\n");
-	iter->handles     = args_out.handles;
+	iter = (dsos_iter_t *)dsos_malloc(sizeof(dsos_iter_t));
+
+	iter->handles     = dsos_rpc_unpack_handles(rpc);
 	iter->attr        = attr;
 	iter->schema      = schema;
-	iter->last_op     = DSOSD_MSG_ITER_OP_NONE;
+	iter->last_op     = DSOS_RPC_ITER_OP_NONE;
 	iter->done        = 0;
+	iter->status      = 0;
 	iter->last_server = -1;
 	iter->obj_sz      = schema->sos_schema->data->obj_sz + schema->sos_schema->data->array_data_sz;
 	pthread_mutex_init(&iter->lock, 0);
 	pthread_cond_init(&iter->prefetch_complete, NULL);
 	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
-
+ out:
+	dsos_rpc_put(rpc);
 	return iter;
 }
 
 int dsos_iter_close(dsos_iter_t *iter)
 {
-	int			i, ret;
-	sos_obj_t		obj;
-	rpc_iter_close_in_t	args_in;
-	rpc_iter_close_out_t	args_out;
+	sos_obj_t	obj;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_CLOSE);
 
-	args_in.iter_handles = iter->handles;
-
-	ret = dsos_rpc_iter_close(&args_in, &args_out);
+	dsos_rpc_pack_handles(rpc, iter->handles);
 
 	while (obj = iter_rbt_min(iter))
 		sos_obj_put(obj);
 	free(iter->handles);
 	free(iter);
 
-	return ret;
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
+}
+
+static void iter_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t *buf, int server_num, void *ctxt)
+{
+	dsos_iter_t	*iter = (dsos_iter_t *)ctxt;
+	sos_obj_t	*objs = (sos_obj_t *)rpc->ctxt2.ptr1;
+
+	switch (dsos_err_get_remote(rpc->status, server_num)) {
+	    case 0:
+		objs[server_num]->obj_ref = dsos_rpc_unpack_obj_id_one(rpc, server_num);
+		if (dsos_rpc_unpack_u32_one(rpc, server_num) & DSOS_RPC_FLAGS_INLINE)
+			dsos_rpc_unpack_obj_one(rpc, server_num, objs[server_num]);
+		pthread_mutex_lock(&iter->lock);
+		iter_insert_obj(iter, objs[server_num]);
+		pthread_mutex_unlock(&iter->lock);
+		break;
+	    case ENOENT:
+		sos_obj_put(objs[server_num]);
+		dsos_err_set_remote(rpc->status, server_num, 0);
+		break;
+	    default:
+		dsos_error("rpc %p iter %p status %d from server %d\n",
+			   rpc, iter,
+			   dsos_err_get_remote(rpc->status, server_num),
+			   server_num);
+		sos_obj_put(objs[server_num]);
+		break;
+	}
 }
 
 sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 {
-	int			i, ret;
-	sos_obj_t		obj, *objs;
-	rpc_iter_step_all_in_t	args_in;
-	rpc_iter_step_all_out_t	args_out;
-
-	/* Allocate g.num_servers SOS objects. */
-	objs = malloc(g.num_servers * sizeof(sos_obj_t));
-	if (!objs)
-		return NULL;
-	for (i = 0; i < g.num_servers; ++i) {
-		objs[i] = sos_obj_malloc(iter->schema->sos_schema);
-		if (!objs[i])
-			return NULL;
-		objs[i]->ctxt = iter->schema;
-	}
-
-	args_in.op           = DSOSD_MSG_ITER_OP_BEGIN;
-	args_in.iter_handles = iter->handles;
-	args_in.sos_objs     = objs;
-	args_in.key          = NULL;
+	int		i, ret;
+	sos_obj_t	obj = NULL, *objs;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_STEP);
 
 	pthread_mutex_lock(&iter->lock);
 	ret = iter_reset(iter);
 	pthread_mutex_unlock(&iter->lock);
 
-	ret = ret || dsos_rpc_iter_step_all(&args_in, &args_out);
-	if (ret)
-		return NULL;
+	objs = dsos_obj_calloc(g.num_servers, iter->schema);
 
-	for (i = 0; i < g.num_servers; ++i) {
-		if (args_out.found[i])
-			iter_insert_obj(iter, objs[i]);
-		else
-			sos_obj_put(objs[i]);
-	}
-	free(args_out.found);
-	free(objs);
+	dsos_rpc_pack_u32_all(rpc, DSOS_RPC_ITER_OP_BEGIN);
+	dsos_rpc_pack_handles(rpc, iter->handles);
+	dsos_rpc_pack_obj_ptrs(rpc, objs);
+	dsos_rpc_pack_key_all(rpc, NULL);
+
+	rpc->ctxt2.ptr1 = objs;
+
+	ret = dsos_rpc_send_cb(rpc, DSOS_RPC_WAIT | DSOS_RPC_CB_ALL | DSOS_RPC_PUT, iter_cb, iter);
+	if (ret)
+		goto out;
 
 	pthread_mutex_lock(&iter->lock);
 	obj = iter_remove_min(iter);
@@ -441,20 +457,19 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 		iter_prefetch(iter, dsos_obj_server(obj));
 #endif
 	pthread_mutex_unlock(&iter->lock);
-
+ out:
+	free(objs);
 	return obj;
 }
 
 sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 {
-	int			ret;
-	sos_obj_t		obj;
-	rpc_iter_step_one_in_t	args_in;
-	rpc_iter_step_one_out_t	args_out;
+	int		ret;
+	sos_obj_t	obj;
 
 	pthread_mutex_lock(&iter->lock);
 
-	dsos_debug("iter %p prefetch_req %p\n", iter, iter->prefetch_req);
+	dsos_debug("iter %p prefetch_rpc %p\n", iter, iter->prefetch_rpc);
 
 	if (iter->done) {
 		pthread_mutex_unlock(&iter->lock);
@@ -466,7 +481,7 @@ sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 	iter_prefetch(iter, iter->last_server);
 #endif
 	/* Wait for the previously prefetched object. */
-	while (iter->prefetch_req)
+	while (iter->prefetch_rpc)
 		pthread_cond_wait(&iter->prefetch_complete, &iter->lock);
 
 	if (iter->status) {
@@ -487,47 +502,31 @@ sos_obj_t dsos_iter_next(dsos_iter_t *iter)
 
 sos_obj_t dsos_iter_find(dsos_iter_t *iter, sos_key_t key)
 {
-	int			i, ret;
-	sos_obj_t		obj, *objs;
-	rpc_iter_step_all_in_t	args_in;
-	rpc_iter_step_all_out_t	args_out;
-
-	/* Allocate g.num_servers SOS objects. */
-	objs = malloc(g.num_servers * sizeof(sos_obj_t));
-	if (!objs)
-		return NULL;
-	for (i = 0; i < g.num_servers; ++i) {
-		objs[i] = sos_obj_malloc(iter->schema->sos_schema);
-		if (!objs[i])
-			return NULL;
-		objs[i]->ctxt = iter->schema;
-	}
-
-	args_in.op           = DSOSD_MSG_ITER_OP_FIND;
-	args_in.iter_handles = iter->handles;
-	args_in.sos_objs     = objs;
-	args_in.key          = key;
+	int		i, ret;
+	sos_obj_t	obj = NULL, *objs;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_STEP);
 
 	pthread_mutex_lock(&iter->lock);
 	ret = iter_reset(iter);
 	pthread_mutex_unlock(&iter->lock);
 
-	ret = ret || dsos_rpc_iter_step_all(&args_in, &args_out);
-	if (ret)
-		return NULL;
+	objs = dsos_obj_calloc(g.num_servers, iter->schema);
 
-	for (i = 0; i < g.num_servers; ++i) {
-		if (args_out.found[i])
-			iter_insert_obj(iter, objs[i]);
-		else
-			sos_obj_put(objs[i]);
-	}
-	free(args_out.found);
-	free(objs);
+	dsos_rpc_pack_u32_all(rpc, DSOS_RPC_ITER_OP_FIND);
+	dsos_rpc_pack_handles(rpc, iter->handles);
+	dsos_rpc_pack_obj_ptrs(rpc, objs);
+	dsos_rpc_pack_key_all(rpc, key);
+
+	rpc->ctxt2.ptr1 = objs;
+
+	ret = dsos_rpc_send_cb(rpc, DSOS_RPC_WAIT | DSOS_RPC_CB_ALL | DSOS_RPC_PUT, iter_cb, iter);
+	if (ret)
+		goto out;
 
 	pthread_mutex_lock(&iter->lock);
 	obj = iter_remove_min(iter);
 	pthread_mutex_unlock(&iter->lock);
-
+ out:
+	free(objs);
 	return obj;
 }

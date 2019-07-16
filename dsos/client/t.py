@@ -122,7 +122,7 @@ if __name__ == "__main__":
             raise Exception("must set $DSOS_CONFIG")
 
         first = True
-        for sz in range(16,9000):
+        for sz in range(1000,9000):
             t = Test("test{}".format(sz), OrderedDict([ ("*seq","uint64"),
                                                         ("*int1","uint64"),
                                                         ("*int2","uint64"),
@@ -138,7 +138,7 @@ if __name__ == "__main__":
             t.doImport()
             t.doIter()
             t.doFind()
-            t.doDeletes("seq", 100)
+            t.doDeletes("seq", 10)
             del t
 
     except CalledProcessError as e:

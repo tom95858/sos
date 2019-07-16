@@ -122,7 +122,7 @@ int dsos_init(const char *config_filename)
 	if (ret = dsos_err_status(dsos_errno))
 		return ret;
 
-	dsos_req_init();
+	dsos_rpc_init();
 
 	return 0;
 }

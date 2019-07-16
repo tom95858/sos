@@ -8,8 +8,9 @@
 #include <assert.h>
 #include <zap.h>
 #include "mmalloc.h"
-#include "dsosd_msg_layout.h"
+#include <dsos/dsos.h>
 #include "sos_priv.h"
+#include "dsos_pack.h"
 
 /* Options. */
 struct opts_s {
@@ -25,6 +26,10 @@ struct dsosd_stats_s {
 	int	tot_num_connects;
 	int	tot_num_disconnects;
 	int	tot_num_reqs;
+	int	tot_num_obj_creates_inline;
+	int	tot_num_obj_creates_rma;
+	int	tot_num_obj_gets_inline;
+	int	tot_num_obj_gets_rma;
 	int	*q_depths;
 	int	*num_worker_reqs;
 };
@@ -44,31 +49,36 @@ struct globals_s {
 extern struct globals_s g;
 
 typedef struct dsosd_client_s	dsosd_client_t;
-typedef struct dsosd_req_s	dsosd_req_t;
 
 /*
- * A client work request. This is created when an incoming message is
+ * A client RPC request. This is created when an incoming message is
  * received and maintains the request state throughout the request's
  * lifetime.
  */
-typedef struct dsosd_req_s {
+typedef struct dsosd_rpc_s {
 	ods_atomic_t		refcount;
 	dsosd_client_t		*client;
-	dsosd_msg_t		*resp;         // response message
-	size_t			resp_max_len;  // size allocated for resp msg
-	size_t			resp_len;      // actual response msg size
+	dsos_buf_t		req;           // request msg (from client)
+	dsos_buf_t		resp;          // response msg (to client)
 	void			*ctxt;
 #if 1
 	// The following field goes away once SOS can map the ODS maps
 	// so objects can be RMA'd directly.
 	void			*rma_buf;      // XXX buf from registered heap (temporary)
 #endif
-} dsosd_req_t;
+} dsosd_rpc_t;
 
 /* Red-black tree node to map a string to a pointer. */
+enum {
+	DSOSD_HANDLE_CONT,
+	DSOSD_HANDLE_PART,
+	DSOSD_HANDLE_SCHEMA,
+	DSOSD_HANDLE_ITER,
+} dsosd_handle_type_t;
 struct ptr_rbn {
 	struct rbn	rbn;
 	void		*ptr;
+	int		type;
 };
 
 /*
@@ -88,7 +98,6 @@ typedef struct dsosd_client_s {
 	uint64_t		next_handle;   // next handle # to give out
 	int			initialized;   // set when endpoint is ready
 	sem_t			initialized_sem;
-	int			debug;
 #if 1
 	// XXX temporary, until SOS can alloc from reg mem
 	mm_region_t		heap;          // mapped heap for object RMA
@@ -101,30 +110,53 @@ typedef struct dsosd_client_s {
 void		dsosd_client_get(dsosd_client_t *client);
 dsosd_client_t	*dsosd_client_new(zap_ep_t ep);
 void		dsosd_client_put(dsosd_client_t *client);
-dsosd_objid_t	dsosd_objid(sos_obj_t sos_obj);
-zap_err_t	dsosd_req_complete(dsosd_req_t *req, size_t len);
-void		dsosd_req_get(dsosd_req_t *req);
-dsosd_req_t	*dsosd_req_new(dsosd_client_t *client, uint16_t type, uint64_t msg_id, size_t msg_len);
-void		dsosd_req_put(dsosd_req_t *req);
-char		*str_replace(char *orig, char *rep, char *with);
+dsos_obj_id_t	dsosd_obj_id(sos_obj_t sos_obj);
 
-sos_schema_template_t	rpc_deserialize_schema_template(char *buf, size_t len);
-void		rpc_handle_container_open(zap_ep_t ep, dsosd_msg_container_open_req_t *msg, size_t len);
-void		rpc_handle_container_close(zap_ep_t ep, dsosd_msg_container_close_req_t *msg, size_t len);
-void		rpc_handle_container_new(zap_ep_t ep, dsosd_msg_container_new_req_t *msg, size_t len);
-void		rpc_handle_obj_create(zap_ep_t ep, dsosd_msg_obj_create_req_t *msg, size_t len);
-void		rpc_handle_obj_delete(zap_ep_t ep, dsosd_msg_obj_delete_req_t *msg, size_t len);
-void		rpc_handle_obj_get(zap_ep_t ep, dsosd_msg_obj_get_req_t *msg, size_t len);
-void		rpc_handle_part_create(zap_ep_t ep, dsosd_msg_part_create_req_t *msg, size_t len);
-void		rpc_handle_part_find(zap_ep_t ep, dsosd_msg_part_find_req_t *msg, size_t len);
-void		rpc_handle_part_set_state(zap_ep_t ep, dsosd_msg_part_set_state_req_t *msg, size_t len);
-void		rpc_handle_ping(zap_ep_t ep, dsosd_msg_ping_req_t *msg, size_t len);
-void		rpc_handle_schema_add(zap_ep_t ep, dsosd_msg_schema_add_req_t *msg, size_t len);
-void		rpc_handle_schema_by_name(zap_ep_t ep, dsosd_msg_schema_by_name_req_t *msg, size_t len);
-void		rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_template_req_t *msg, size_t len);
+zap_err_t	dsosd_rpc_complete(dsosd_rpc_t *rpc, int status);
+void		dsosd_rpc_complete_with_obj(dsosd_rpc_t *rpc, sos_obj_t obj, uint64_t obj_remote_va);
+void		dsosd_rpc_get(dsosd_rpc_t *rpc);
+dsosd_rpc_t	*dsosd_rpc_new(dsosd_client_t *client, dsos_msg_t *msg, size_t len);
+void		dsosd_rpc_put(dsosd_rpc_t *rpc);
 
-#define dsosd_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
-#define dsosd_error(fmt, ...)	sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)
+void		rpc_handle_cont_open(dsosd_rpc_t *rpc);
+void		rpc_handle_cont_close(dsosd_rpc_t *rpc);
+void		rpc_handle_cont_new(dsosd_rpc_t *rpc);
+void		rpc_handle_iter_new(dsosd_rpc_t *rpc);
+void		rpc_handle_iter_step(dsosd_rpc_t *rpc);
+void		rpc_handle_obj_create(dsosd_rpc_t *rpc);
+void		rpc_handle_obj_delete(dsosd_rpc_t *rpc);
+void		rpc_handle_obj_get(dsosd_rpc_t *rpc);
+void		rpc_handle_part_create(dsosd_rpc_t *rpc);
+void		rpc_handle_part_find(dsosd_rpc_t *rpc);
+void		rpc_handle_part_set_state(dsosd_rpc_t *rpc);
+void		rpc_handle_ping(dsosd_rpc_t *rpc);
+void		rpc_handle_schema_add(dsosd_rpc_t *rpc);
+void		rpc_handle_schema_by_name(dsosd_rpc_t *rpc);
+void		rpc_handle_schema_from_template(dsosd_rpc_t *rpc);
+
+int		dsosd_rpc_pack_fits(dsosd_rpc_t *rpc, int len);
+int		dsosd_rpc_pack_handle(dsosd_rpc_t *rpc, dsos_handle_t handle);
+int		dsosd_rpc_pack_obj_needs(sos_obj_t obj);
+int		dsosd_rpc_pack_obj(dsosd_rpc_t *rpc, sos_obj_t obj);
+int		dsosd_rpc_pack_obj_id(dsosd_rpc_t *rpc, sos_obj_ref_t obj_id);
+int		dsosd_rpc_pack_schema(dsosd_rpc_t *rpc, sos_schema_t schema);
+int		dsosd_rpc_pack_u32(dsosd_rpc_t *rpc, uint32_t val);
+dsos_handle_t	dsosd_rpc_unpack_handle(dsosd_rpc_t *rpc);
+sos_key_t	dsosd_rpc_unpack_key(dsosd_rpc_t *rpc);
+uint32_t	dsosd_rpc_unpack_u32(dsosd_rpc_t *rpc);
+int		dsosd_rpc_unpack_obj(dsosd_rpc_t *rpc, sos_obj_t obj);
+uint64_t	dsosd_rpc_unpack_obj_ptr(dsosd_rpc_t *rpc, uint64_t *plen);
+sos_obj_ref_t	dsosd_rpc_unpack_obj_id(dsosd_rpc_t *rpc);
+sos_schema_t	dsosd_rpc_unpack_schema(dsosd_rpc_t *rpc);
+char		*dsosd_rpc_unpack_str(dsosd_rpc_t *rpc);
+
+#define dsosd_debug(fmt, ...)		sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#ifdef RPC_DEBUG
+#define dsosd_rpc_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
+#else
+#define dsosd_rpc_debug(fmt, ...)	do {} while (0)
+#endif
+#define dsosd_error(fmt, ...)		sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsosd_fatal(fmt, ...) \
 	do {									\
 		if (!__ods_log_fp)						\
@@ -133,5 +165,13 @@ void		rpc_handle_schema_from_template(zap_ep_t ep, dsosd_msg_schema_from_templat
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
 		assert(0);							\
 	} while (0);
+
+static inline char *dsosd_malloc(size_t len)
+{
+	char *ret = malloc(len);
+	if (!ret)
+		dsosd_fatal("out of memory\n");
+	return ret;
+}
 
 #endif

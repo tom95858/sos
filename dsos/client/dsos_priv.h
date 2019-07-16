@@ -12,20 +12,20 @@
 #include "sos_priv.h"
 #include "json_util.h"
 #include "mmalloc.h"
-#include "../server/dsosd_msg_layout.h"
+#include "../server/dsos_rpc_msg.h"
+#include "dsos_pack.h"
 
 typedef struct dsos_err_s	dsos_err_t;
 typedef struct dsos_conn_s	dsos_conn_t;
-typedef struct dsos_req_s	dsos_req_t;
+typedef struct dsos_rpc_s	dsos_rpc_t;
 typedef struct dsos_buf_s	dsos_buf_t;
 typedef struct dsos_obj_s	dsos_obj_t;
 typedef struct dsos_s		dsos_t;
 typedef struct dsos_schema_s	dsos_schema_t;
+typedef enum dsos_rpc_flags_e	dsos_rpc_flags_t;
 
-typedef void (*dsos_req_cb_t) (dsos_req_t *, uint32_t flags, dsos_buf_t *, int, void *);
-typedef void (*dsos_req_cb2_t)(dsos_req_t *, uint32_t flags, void *, void *);
+typedef void (*dsos_rpc_cb_t) (dsos_rpc_t *, dsos_rpc_flags_t flags, dsos_buf_t *, int, void *);
 typedef void (*dsos_obj_cb_t)(sos_obj_t, void *);
-typedef void (*dsos_free_t)(void *ptr);
 
 typedef struct {
 	void	*ptr1;
@@ -62,52 +62,47 @@ struct globals_s {
 extern struct globals_s g;
 
 /*
- * A work request. This is created in response to the user calling
- * into DSOS and lives throughout the request's lifetime to track its
+ * A vector RPC. This is created in response to the user calling into
+ * DSOS and lives throughout the request's lifetime to track its
  * state.
  */
 
-typedef enum {
-	DSOS_REQ_ONE			= 0x00000001,
-	DSOS_REQ_ALL			= 0x00000002,
-	DSOS_REQ_CB_FIRST		= 0x00000004,
-	DSOS_REQ_CB_LAST		= 0x00000008,
-	DSOS_REQ_CB_ALL			= 0x00000010,
-	DSOS_REQ_CB			= DSOS_REQ_CB_ALL,
-	DSOS_REQ_WAIT			= 0x00000020,
-} dsos_req_flags_t;
+typedef enum dsos_rpc_flags_e {
+	DSOS_RPC_ONE			= 0x00000001,
+	DSOS_RPC_ALL			= 0x00000002,
+	DSOS_RPC_CB_FIRST		= 0x00000004,
+	DSOS_RPC_CB_LAST		= 0x00000008,
+	DSOS_RPC_CB_ALL			= 0x00000010,
+	DSOS_RPC_CB			= DSOS_RPC_CB_ALL,
+	DSOS_RPC_WAIT			= 0x00000020,
+	DSOS_RPC_PERSIST_RESPONSES	= 0x00000040,
+	DSOS_RPC_PUT			= 0x00000080,
+} dsos_rpc_flags_t;
 
-typedef struct dsos_buf_s {
-	dsosd_msg_t		*msg;          // the formatted msg
-	size_t			max_len;       // # bytes allocated for msg
-	size_t			len;           // actual size of msg
-	dsos_free_t		free_fn;       // set if msg is a copy of a transport buffer
-} dsos_buf_t;
+typedef struct dsos_rpc_bufs_s {
+	dsos_buf_t		req;          // request msg (from client)
+	dsos_buf_t		resp;         // response msg (to client)
+} dsos_rpc_bufs_t;
 
-typedef struct dsos_req_bufs_s {
-	dsos_buf_t		send;
-	dsos_buf_t		resp;
-} dsos_req_bufs_t;
-
-typedef struct dsos_req_s {
+typedef struct dsos_rpc_s {
 	ods_atomic_t		refcount;
-	uint32_t		flags;
+	dsos_rpc_flags_t	flags;
 	dsos_err_t		status;        // local zap_send statuses & remote response statuses
-	int			server_num;    // for DSOS_REQ_ONE, the server getting the req
-	int			num_servers;   // # servers getting this req
+	int			server_num;    // for DSOS_RPC_ONE, the server getting the rpc
+	int			num_servers;   // # servers getting this rpc
 	ods_atomic_t		num_pend;      // # servers still pending
-	dsos_req_bufs_t		*buf;          // shortcut to bufs[0]
-	dsos_req_bufs_t		*bufs;         // buffers, one per server
+	dsos_rpc_bufs_t		*buf;          // shortcut to bufs[0]
+	dsos_rpc_bufs_t		*bufs;         // buffers, one per server
 	sem_t			sem;           // for signaling responses
-	dsos_req_cb_t		cb;            // response callback
+	dsos_rpc_cb_t		cb;            // response callback
 	void			*ctxt;         // for callbacks
-	dsos_ptr_tuple_t	ctxt2;
-} dsos_req_t;
+	dsos_ptr_tuple_t	ctxt2;         // for callbacks
+} dsos_rpc_t;
 
-/* Red-black tree to map work-request id to the dsos_req_t pointer. */
-struct req_rbn {
+/* Red-black tree to map work-request id to the dsos_rpc_t pointer. */
+struct rpc_rbn {
 	struct rbn	rbn;
-	dsos_req_t	*req;
+	dsos_rpc_t	*rpc;
 };
 
 /*
@@ -115,7 +110,7 @@ struct req_rbn {
  * one per server.
  */
 typedef struct dsos_s {
-	dsosd_handle_t	*handles;
+	dsos_handle_t	*handles;
 } dsos_t;
 
 /*
@@ -123,7 +118,7 @@ typedef struct dsos_s {
  * one per server.
  */
 typedef struct dsos_part_s {
-	dsosd_handle_t	*handles;
+	dsos_handle_t	*handles;
 } dsos_part_t;
 
 /*
@@ -132,7 +127,7 @@ typedef struct dsos_part_s {
  */
 typedef struct dsos_schema_s {
 	dsos_t		*cont;                // container
-	dsosd_handle_t	*handles;             // vector of server handles
+	dsos_handle_t	*handles;             // vector of server handles
 	sos_schema_t	sos_schema;           // local SOS schema handle
 } dsos_schema_t;
 
@@ -148,12 +143,12 @@ typedef struct dsos_iter_s {
 	pthread_cond_t	prefetch_complete;
 	dsos_schema_t	*schema;
 	sos_attr_t	attr;                 // attr this is iterating over
-	dsosd_handle_t	*handles;             // vector of server sos_iter_t handles
+	dsos_handle_t	*handles;             // vector of server sos_iter_t handles
 	int		done;                 // =1 when all servers are done w/the iteration
 	int		last_op;              // last iter op (begin,end,prev,next)
 	int		last_server;          // owning server of the last returned obj
 	int		status;               // status of last prefetch
-	dsos_req_t	*prefetch_req;        // req of last prefetch
+	dsos_rpc_t	*prefetch_rpc;        // rpc of last prefetch
 	size_t		obj_sz;               // object size this iterates over
 	struct rbt	rbt;                  // for finding min key value of recvd objs
 } dsos_iter_t;
@@ -172,196 +167,59 @@ typedef struct dsos_conn_s {
 	sem_t			flow_sem;       // flow-control semaphore
 } dsos_conn_t;
 
-/* Internal RPC API. */
-
-typedef struct {
-	int			server_num;
-	struct dsos_ping_stats	*stats;
-	int			debug;
-} rpc_ping_in_t;
-typedef struct {
-	struct dsos_ping_stats	*stats;
-} rpc_ping_out_t;
-int	dsos_rpc_ping_one(rpc_ping_in_t  *args_inp,
-                         rpc_ping_out_t *args_outp);
-int	dsos_rpc_ping_all(rpc_ping_in_t  *args_inp,
-			  rpc_ping_out_t *args_outp);
-
-typedef struct {
-	char		path[DSOSD_MSG_MAX_PATH];
-	uint32_t	mode;
-} rpc_container_new_in_t;
-typedef struct {
-} rpc_container_new_out_t;
-int	dsos_rpc_container_new(rpc_container_new_in_t  *args_inp,
-			       rpc_container_new_out_t *args_outp);
-
-typedef struct {
-	char		path[DSOSD_MSG_MAX_PATH];
-	uint32_t	perms;
-} rpc_container_open_in_t;
-typedef struct {
-	dsosd_handle_t	*handles;
-} rpc_container_open_out_t;
-int	dsos_rpc_container_open(rpc_container_open_in_t  *args_inp,
-				rpc_container_open_out_t *args_outp);
-
-typedef struct {
-	dsosd_handle_t	*handles;
-} rpc_container_close_in_t;
-typedef struct {
-} rpc_container_close_out_t;
-int	dsos_rpc_container_close(rpc_container_close_in_t  *args_inp,
-				 rpc_container_close_out_t *args_outp);
-
-typedef struct {
-	dsosd_handle_t	*cont_handles;
-	dsosd_handle_t	*schema_handles;
-} rpc_schema_add_in_t;
-typedef struct {
-} rpc_schema_add_out_t;
-int	dsos_rpc_schema_add(rpc_schema_add_in_t  *args_inp,
-			    rpc_schema_add_out_t *args_outp);
-
-typedef struct {
-	char		name[DSOSD_MSG_MAX_PATH];
-	dsosd_handle_t	*cont_handles;
-} rpc_schema_by_name_in_t;
-typedef struct {
-	dsosd_handle_t	*handles;
-	char		templ[DSOSD_MSG_MAX_DATA];
-} rpc_schema_by_name_out_t;
-int	dsos_rpc_schema_by_name(rpc_schema_by_name_in_t  *args_inp,
-				rpc_schema_by_name_out_t *args_outp);
-
-typedef struct {
-	uint32_t	len;
-	char		templ[DSOSD_MSG_MAX_DATA];
-} rpc_schema_from_template_in_t;
-typedef struct {
-	dsosd_handle_t	*handles;
-} rpc_schema_from_template_out_t;
-int	dsos_rpc_schema_from_template(rpc_schema_from_template_in_t  *args_inp,
-				      rpc_schema_from_template_out_t *args_outp);
-
-typedef struct {
-	sos_obj_t	obj;
-	dsos_schema_t	*schema;
-	dsos_obj_cb_t	cb;
-	void		*ctxt;
-} rpc_object_create_in_t;
-int	dsos_rpc_object_create(rpc_object_create_in_t *args_inp);
-
-typedef struct {
-	sos_obj_t	obj;
-} rpc_object_delete_in_t;
-typedef struct {
-} rpc_object_delete_out_t;
-int	dsos_rpc_object_delete(rpc_object_delete_in_t *args_inp,
-                              rpc_object_delete_out_t *args_outp);
-
-typedef struct {
-	char		name[DSOSD_MSG_MAX_PATH];
-	char		path[DSOSD_MSG_MAX_PATH];
-	dsosd_handle_t	*cont_handles;
-} rpc_part_create_in_t;
-typedef struct {
-} rpc_part_create_out_t;
-int	dsos_rpc_part_create(rpc_part_create_in_t  *args_inp,
-			     rpc_part_create_out_t *args_outp);
-
-typedef struct {
-	int		new_state;
-	dsosd_handle_t	*handles;
-} rpc_part_set_state_in_t;
-typedef struct {
-} rpc_part_set_state_out_t;
-int	dsos_rpc_part_set_state(rpc_part_set_state_in_t  *args_inp,
-				rpc_part_set_state_out_t *args_outp);
-
-typedef struct {
-	dsosd_handle_t	*cont_handles;
-	char		name[DSOSD_MSG_MAX_PATH];
-} rpc_part_find_in_t;
-typedef struct {
-	dsosd_handle_t	*handles;
-} rpc_part_find_out_t;
-int	dsos_rpc_part_find(rpc_part_find_in_t  *args_inp,
-			   rpc_part_find_out_t *args_outp);
-
-typedef struct {
-	dsos_t		*cont;
-	sos_obj_ref_t	obj_id;
-	sos_obj_t	sos_obj;
-} rpc_obj_get_in_t;
-typedef struct {
-} rpc_obj_get_out_t;
-int	dsos_rpc_obj_get(rpc_obj_get_in_t  *args_inp,
-			 rpc_obj_get_out_t *args_outp);
-
-typedef struct {
-	dsosd_handle_t	*schema_handles;
-	sos_attr_t	attr;
-} rpc_iter_new_in_t;
-typedef struct {
-	dsosd_handle_t	*handles;
-} rpc_iter_new_out_t;
-int	dsos_rpc_iter_new(rpc_iter_new_in_t  *args_inp,
-			  rpc_iter_new_out_t *args_outp);
-
-typedef struct {
-	dsosd_handle_t	*iter_handles;
-} rpc_iter_close_in_t;
-typedef struct {
-} rpc_iter_close_out_t;
-int	dsos_rpc_iter_close(rpc_iter_close_in_t  *args_inp,
-			    rpc_iter_close_out_t *args_outp);
-
-typedef struct {
-	dsosd_handle_t	iter_handle;
-	int		op;
-	dsos_iter_t	*iter;
-	sos_obj_t	sos_obj;
-	int		server_num;
-	dsos_req_cb2_t	cb;
-} rpc_iter_step_one_in_t;
-typedef struct {
-	int		found;
-} rpc_iter_step_one_out_t;
-int	dsos_rpc_iter_step_one(rpc_iter_step_one_in_t  *args_inp,
-			       rpc_iter_step_one_out_t *args_outp);
-dsos_req_t *dsos_rpc_iter_step_one_async(rpc_iter_step_one_in_t *args_inp);
-
-typedef struct {
-	dsosd_handle_t	*iter_handles;
-	int		op;
-	sos_key_t	key;
-	sos_obj_t	*sos_objs;
-} rpc_iter_step_all_in_t;
-typedef struct {
-	int		*found;
-} rpc_iter_step_all_out_t;
-int	dsos_rpc_iter_step_all(rpc_iter_step_all_in_t  *args_inp,
-			       rpc_iter_step_all_out_t *args_outp);
-
 /* Internal API. */
+
+void		dsos_rpc_get(dsos_rpc_t *rpc);
+void		dsos_rpc_handle_resp(dsos_conn_t *conn, dsos_msg_t *resp, size_t len);
+void		dsos_rpc_init(void);
+dsos_rpc_t	*dsos_rpc_new(dsos_rpc_flags_t flags, dsos_rpc_type_t type);
+void		dsos_rpc_put(dsos_rpc_t *rpc);
+int		dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags);
+int		dsos_rpc_send_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_rpc_cb_t cb, void *ctxt);
+int		dsos_rpc_send_one(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, int server_num);
+void		dsos_rpc_set_server(dsos_rpc_t *rpc, int server_num);
+
+int		dsos_rpc_pack_fits(dsos_rpc_t *rpc, int len);
+void		dsos_rpc_pack_handle(dsos_rpc_t *rpc, dsos_handle_t handle);
+void		dsos_rpc_pack_handles(dsos_rpc_t *rpc, dsos_handle_t *handles);
+void		dsos_rpc_pack_key_one(dsos_rpc_t *rpc, sos_key_t key);
+void		dsos_rpc_pack_key_all(dsos_rpc_t *rpc, sos_key_t key);
+void		dsos_rpc_pack_obj(dsos_rpc_t *rpc, sos_obj_t obj);
+void		dsos_rpc_pack_obj_id_all(dsos_rpc_t *rpc, sos_obj_ref_t obj_id);
+void		dsos_rpc_pack_obj_id_one(dsos_rpc_t *rpc, sos_obj_ref_t obj_id);
+int		dsos_rpc_pack_obj_needs(sos_obj_t obj);
+void		dsos_rpc_pack_obj_ptr(dsos_rpc_t *rpc, sos_obj_t obj);
+void		dsos_rpc_pack_obj_ptrs(dsos_rpc_t *rpc, sos_obj_t *objs);
+void		dsos_rpc_pack_u32_one(dsos_rpc_t *rpc, uint32_t val);
+void		dsos_rpc_pack_u32_all(dsos_rpc_t *rpc, uint32_t val);
+void		dsos_rpc_pack_u64_one(dsos_rpc_t *rpc, uint64_t val);
+void		dsos_rpc_pack_u64_all(dsos_rpc_t *rpc, uint64_t val);
+void		dsos_rpc_pack_schema_all(dsos_rpc_t *rpc, sos_schema_t schema);
+void		dsos_rpc_pack_str_one(dsos_rpc_t *rpc, const char *str);
+void		dsos_rpc_pack_str_all(dsos_rpc_t *rpc, const char *str);
+void		dsos_rpc_unpack_buf_and_copy(dsos_rpc_t *rpc, void *to, int *plen);
+void		dsos_rpc_unpack_buf_and_copy_one(dsos_rpc_t *rpc, int server_num, void *to, int *plen);
+void		dsos_rpc_unpack_bufs_and_copy(dsos_rpc_t *rpc, void *to, int *plen);
+dsos_handle_t	*dsos_rpc_unpack_handles(dsos_rpc_t *rpc);
+void		dsos_rpc_unpack_obj(dsos_rpc_t *rpc, sos_obj_t obj);
+void		dsos_rpc_unpack_obj_one(dsos_rpc_t *rpc, int server_num, sos_obj_t obj);
+sos_obj_ref_t	dsos_rpc_unpack_obj_id(dsos_rpc_t *rpc);
+sos_obj_ref_t	dsos_rpc_unpack_obj_id_one(dsos_rpc_t *rpc, int server_num);
+sos_schema_t	dsos_rpc_unpack_schema_one(dsos_rpc_t *rpc, int server_num);
+char		*dsos_rpc_unpack_str(dsos_rpc_t *rpc);
+uint32_t	dsos_rpc_unpack_u32(dsos_rpc_t *rpc);
+uint32_t	dsos_rpc_unpack_u32_one(dsos_rpc_t *rpc, int server_num);
+uint32_t	dsos_rpc_unpack_u64(dsos_rpc_t *rpc);
+
 int		dsos_config_read(const char *config_file);
 int		dsos_connect(const char *host, const char *service, int server_id, int wait);
 void		dsos_disconnect(void);
 void		dsos_err_init(void);
+void		dsos_free(void *ptr);
+sos_obj_t	dsos_obj_malloc(dsos_schema_t *schema);
+sos_obj_t	*dsos_obj_calloc(int num_objs, dsos_schema_t *schema);
 const char	*dsos_msg_type_to_str(int id);
 int		dsos_obj_server(sos_obj_t obj);
-dsos_req_t	*dsos_req_find(dsosd_msg_t *resp);
-void		dsos_req_get(dsos_req_t *req);
-void		dsos_req_init(void);
-void		dsos_req_handle_resp(dsos_conn_t *conn, dsosd_msg_t *msg, size_t len);
-dsos_req_t	*dsos_req_new(dsos_req_flags_t flags, dsos_req_cb_t cb, void *ctxt);
-void		dsos_req_put(dsos_req_t *req);
-int		dsos_req_send(dsos_req_flags_t flags, dsos_req_t *req);
-void		*dsos_rpc_serialize_schema_template(sos_schema_template_t templ, void *buf,
-						    size_t *psz);
-sos_schema_template_t dsos_rpc_deserialize_schema_template(char *buf, size_t len);
-void		*dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz);
 
 #define dsos_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsos_error(fmt, ...)	sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)
@@ -373,5 +231,13 @@ void		*dsos_rpc_serialize_attr_value(sos_value_t v, void *buf, size_t *psz);
 		sos_log(SOS_LOG_FATAL, __func__, __LINE__, fmt, ##__VA_ARGS__);	\
 		assert(0);							\
 	} while (0);
+
+static inline char *dsos_malloc(size_t len)
+{
+	char *ret = malloc(len);
+	if (!ret)
+		dsos_fatal("out of memory\n");
+	return ret;
+}
 
 #endif

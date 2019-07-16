@@ -11,78 +11,6 @@
 #include <ods/rbt.h>
 #include "dsos_priv.h"
 
-const char *dsos_msg_type_to_str(int id)
-{
-	switch (id) {
-	    case DSOSD_MSG_PING_REQ:
-		return "DSOSD_MSG_PING_REQ";
-	    case DSOSD_MSG_PING_RESP:
-		return "DSOSD_MSG_PING_RESP";
-	    case DSOSD_MSG_CONTAINER_NEW_REQ:
-		return "DSOSD_CONTAINER_NEW_REQ";
-	    case DSOSD_MSG_CONTAINER_NEW_RESP:
-		return "DSOSD_CONTAINER_NEW_RESP";
-	    case DSOSD_MSG_CONTAINER_OPEN_REQ:
-		return "DSOSD_CONTAINER_OPEN_REQ";
-	    case DSOSD_MSG_CONTAINER_OPEN_RESP:
-		return "DSOSD_CONTAINER_OPEN_RESP";
-	    case DSOSD_MSG_CONTAINER_CLOSE_REQ:
-		return "DSOSD_CONTAINER_CLOSE_REQ";
-	    case DSOSD_MSG_CONTAINER_CLOSE_RESP:
-		return "DSOSD_CONTAINER_CLOSE_RESP";
-	    case DSOSD_MSG_ITERATOR_CLOSE_REQ:
-		return "DSOSD_ITERATOR_CLOSE_REQ";
-	    case DSOSD_MSG_ITERATOR_CLOSE_RESP:
-		return "DSOSD_ITERATOR_CLOSE_RESP";
-	    case DSOSD_MSG_ITERATOR_NEW_REQ:
-		return "DSOSD_ITERATOR_NEW_REQ";
-	    case DSOSD_MSG_ITERATOR_NEW_RESP:
-		return "DSOSD_ITERATOR_NEW_RESP";
-	    case DSOSD_MSG_ITERATOR_STEP_REQ:
-		return "DSOSD_ITERATOR_STEP_REQ";
-	    case DSOSD_MSG_ITERATOR_STEP_RESP:
-		return "DSOSD_ITERATOR_STEP_RESP";
-	    case DSOSD_MSG_OBJ_CREATE_REQ:
-		return "DSOSD_OBJ_CREATE_REQ";
-	    case DSOSD_MSG_OBJ_CREATE_RESP:
-		return "DSOSD_OBJ_CREATE_RESP";
-	    case DSOSD_MSG_OBJ_DELETE_REQ:
-		return "DSOSD_OBJ_DELETE_REQ";
-	    case DSOSD_MSG_OBJ_DELETE_RESP:
-		return "DSOSD_OBJ_DELETE_RESP";
-	    case DSOSD_MSG_OBJ_GET_REQ:
-		return "DSOSD_OBJ_GET_REQ";
-	    case DSOSD_MSG_OBJ_GET_RESP:
-		return "DSOSD_OBJ_GET_RESP";
-	    case DSOSD_MSG_PART_CREATE_REQ:
-		return "DSOSD_PART_CREATE_REQ";
-	    case DSOSD_MSG_PART_CREATE_RESP:
-		return "DSOSD_PART_CREATE_RESP";
-	    case DSOSD_MSG_PART_FIND_REQ:
-		return "DSOSD_PART_FIND_REQ";
-	    case DSOSD_MSG_PART_FIND_RESP:
-		return "DSOSD_PART_FIND_RESP";
-	    case DSOSD_MSG_PART_SET_STATE_REQ:
-		return "DSOSD_PART_SET_STATE_REQ";
-	    case DSOSD_MSG_PART_SET_STATE_RESP:
-		return "DSOSD_PART_SET_STATE_RESP";
-	    case DSOSD_MSG_SCHEMA_FROM_TEMPLATE_REQ:
-		return "DSOSD_SCHEMA_FROM_TEMPLATE_REQ";
-	    case DSOSD_MSG_SCHEMA_FROM_TEMPLATE_RESP:
-		return "DSOSD_SCHEMA_FROM_TEMPLATE_RESP";
-	    case DSOSD_MSG_SCHEMA_ADD_REQ:
-		return "DSOSD_SCHEMA_ADD_REQ";
-	    case DSOSD_MSG_SCHEMA_ADD_RESP:
-		return "DSOSD_SCHEMA_ADD_RESP";
-	    case DSOSD_MSG_SCHEMA_BY_NAME_REQ:
-		return "DSOSD_SCHEMA_BY_NAME_REQ";
-	    case DSOSD_MSG_SCHEMA_BY_NAME_RESP:
-		return "DSOSD_SCHEMA_BY_NAME_RESP";
-	    default:
-		return "<invalid>";
-	}
-}
-
 static void client_cb(zap_ep_t ep, zap_event_t ev)
 {
 	dsos_conn_t	*conn = (dsos_conn_t *)zap_get_ucontext(ep);
@@ -118,7 +46,7 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_RECV_COMPLETE:
-		dsos_req_handle_resp(conn, (dsosd_msg_t *)ev->data, ev->data_len);
+		dsos_rpc_handle_resp(conn, (dsos_msg_t *)ev->data, ev->data_len);
 		break;
 	    case ZAP_EVENT_READ_COMPLETE:
 	    case ZAP_EVENT_WRITE_COMPLETE:

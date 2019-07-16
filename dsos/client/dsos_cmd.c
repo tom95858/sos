@@ -199,7 +199,7 @@ usage:
 	}
 	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
-		fprintf(stderr, "could not open container\n");
+		dsos_perror("could not open container\n");
 		return 1;
 	}
 	switch (op) {
@@ -286,12 +286,12 @@ int do_import(int ac, char *av[])
 
 	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
-		fprintf(stderr, "could not open container\n");
+		dsos_perror("could not open container\n");
 		return 1;
 	}
 	schema = dsos_schema_by_name(cont, schema_nm);
 	if (!schema) {
-		fprintf(stderr, "could not open schema '%s'\n", schema_nm);
+		dsos_perror("could not open schema '%s'\n", schema_nm);
 		return 1;
 	}
 	sos_schema = schema->sos_schema;
@@ -309,7 +309,7 @@ int do_import(int ac, char *av[])
 			buf[strlen(buf)-1] = 0;  // chomp
 		obj = dsos_obj_alloc(schema);
 		if (!obj) {
-			fprintf(stderr, "could not create object %d\n", i);
+			dsos_perror("could not create object %d\n", i);
 			exit(1);
 		}
 		for (i = 0, tok = strtok(buf, ","); tok; tok = strtok(NULL, ","), ++i) {
@@ -326,7 +326,7 @@ int do_import(int ac, char *av[])
 		}
 		ret = dsos_obj_create(obj, obj_cb, &sem);
 		if (ret) {
-			fprintf(stderr, "error %d creating DSOS object\n", ret);
+			dsos_perror("error %d creating DSOS object\n", ret);
 			return 1;
 		}
 		sos_obj_put(obj);
@@ -384,12 +384,12 @@ int do_iter(int ac, char *av[])
 
 	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
-		fprintf(stderr, "could not open container\n");
+		dsos_perror("could not open container\n");
 		return 1;
 	}
 	schema = dsos_schema_by_name(cont, schema_nm);
 	if (!schema) {
-		fprintf(stderr, "could not open schema '%s'\n", schema_nm);
+		dsos_perror("could not open schema '%s'\n", schema_nm);
 		return 1;
 	}
 	if (attr_nm[0] == '#')
@@ -397,12 +397,12 @@ int do_iter(int ac, char *av[])
 	else
 		attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
 	if (!attr) {
-		fprintf(stderr, "could not find attribute '%s'\n", attr_nm);
+		dsos_perror("could not find attribute '%s'\n", attr_nm);
 		return 1;
 	}
 	iter = dsos_iter_new(schema, attr);
 	if (!iter) {
-		printf("could not create iter\n");
+		dsos_perror("could not create iter\n");
 		return 1;
 	}
 
@@ -461,12 +461,12 @@ int do_delete(int ac, char *av[])
 
 	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
-		fprintf(stderr, "could not open container\n");
+		dsos_perror("could not open container\n");
 		return 1;
 	}
 	schema = dsos_schema_by_name(cont, schema_nm);
 	if (!schema) {
-		fprintf(stderr, "could not open schema '%s'\n", schema_nm);
+		dsos_perror("could not open schema '%s'\n", schema_nm);
 		return 1;
 	}
 	if (attr_nm[0] == '#')
@@ -474,12 +474,12 @@ int do_delete(int ac, char *av[])
 	else
 		attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
 	if (!attr) {
-		fprintf(stderr, "could not find attribute '%s'\n", attr_nm);
+		dsos_perror("could not find attribute '%s'\n", attr_nm);
 		return 1;
 	}
 	iter = dsos_iter_new(schema, attr);
 	if (!iter) {
-		printf("could not create iter\n");
+		dsos_perror("could not create iter\n");
 		return 1;
 	}
 
@@ -532,12 +532,12 @@ int do_find(int ac, char *av[])
 	}
 	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
-		fprintf(stderr, "could not open container\n");
+		dsos_perror("could not open container\n");
 		return 1;
 	}
 	schema = dsos_schema_by_name(cont, schema_nm);
 	if (!schema) {
-		fprintf(stderr, "could not open schema '%s'\n", schema_nm);
+		dsos_perror("could not open schema '%s'\n", schema_nm);
 		return 1;
 	}
 	if (optind >= ac) {
@@ -551,7 +551,7 @@ int do_find(int ac, char *av[])
 	}
 	attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
 	if (!attr) {
-		fprintf(stderr, "could not find attribute %s in schema\n", attr_nm);
+		dsos_perror("could not find attribute '%s'\n", attr_nm);
 		return 1;
 	}
 
@@ -570,7 +570,7 @@ int do_find(int ac, char *av[])
 
 	iter = dsos_iter_new(schema, attr);
 	if (!iter) {
-		fprintf(stderr, "could not create iter\n");
+		dsos_perror("could not create iter\n");
 		return 1;
 	}
 
@@ -642,20 +642,24 @@ int do_ping(int ac, char *av[])
 		if (server_num == -1) {
 			ret = dsos_ping_all(&statsp, dump);
 		} else {
-			ret = dsos_ping_one(server_num, &stats);
+			ret = dsos_ping_one(server_num, &stats, dump);
 			statsp = &stats;
 		}
 		if (ret) {
-			fprintf(stderr, "ping error %d\n", ret);
+			dsos_perror("ping error %d\n", ret);
 			return 1;
 		}
 		for (j = 0; j < g.num_servers; ++j) {
-			printf("server %d: %d/%d conn/disc %d reqs %d clients %f msec\n",
+			printf("server %d: %d/%d conn/disc %d reqs %d clients creates: %d/%d gets: %d/%d %f msec\n",
 			       server_num == -1 ? j : server_num,
 			       statsp[j].tot_num_connects,
 			       statsp[j].tot_num_disconnects,
 			       statsp[j].tot_num_reqs,
 			       statsp[j].num_clients,
+			       statsp[j].tot_num_obj_creates_inline,
+			       statsp[j].tot_num_obj_creates_rma,
+			       statsp[j].tot_num_obj_gets_inline,
+			       statsp[j].tot_num_obj_gets_rma,
 			       statsp[j].nsecs/1000000.0);
 			if (server_num >= 0)
 				break;

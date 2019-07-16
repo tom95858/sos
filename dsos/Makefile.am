@@ -1,1 +1,1 @@
-SUBDIRS = client server include util
+SUBDIRS = util client server include

@@ -13,9 +13,41 @@ struct dsos_ping_stats {
 	int		tot_num_connects;
 	int		tot_num_disconnects;
 	int		tot_num_reqs;
+	int		tot_num_obj_creates_rma;
+	int		tot_num_obj_creates_inline;
+	int		tot_num_obj_gets_rma;
+	int		tot_num_obj_gets_inline;
 	int		num_clients;
 	uint64_t	nsecs;
 };
+
+/*
+ * A "handle" represents a server-side pointer to something like a container
+ * or schema. When we send an RPC to a server, it sends back a handle instead
+ * of a pointer. These handles are sent back in operations that locally
+ * would take a pointer.
+ */
+typedef uint64_t	dsos_handle_t;
+
+/*
+ * A DSOS object id is unique within a distributed container. The top
+ * uint32_t identifies the server where the object resides, and the
+ * bottom uint32_t is the object ref which identifies the object within
+ * its container on that server. This overlays the original (local) SOS
+ * obj id of the same size; it overloads the ODS ref part to store
+ * the server ref. The ODS ref is not needed because it is now
+ * implied from the container, and from the assumption that the container
+ * in DSOS has only one partition.
+ */
+typedef struct {
+	union {
+		struct {
+			uint64_t	serv;    // owning server
+			uint64_t	obj;     // ref inside the ODS
+		};
+		sos_obj_ref_t		as_ref;
+	};
+} dsos_obj_id_t;
 
 enum {
 	DSOS_ERR_LOCAL  = 1,
@@ -61,8 +93,8 @@ int		dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path
 dsos_part_t	*dsos_part_find(dsos_t *cont, const char *name);
 int		dsos_part_state_set(dsos_part_t *part, sos_part_state_t new_state);
 void		dsos_perror(const char *fmt, ...);
-int		dsos_ping_one(int server_num, struct dsos_ping_stats *stats);
-int		dsos_ping_all(struct dsos_ping_stats **statsp, int dump);
+int		dsos_ping_one(int server_num, struct dsos_ping_stats *stats, int debug);
+int		dsos_ping_all(struct dsos_ping_stats **statsp, int debug);
 int		dsos_schema_add(dsos_t *cont, dsos_schema_t *schema);
 dsos_schema_t	*dsos_schema_from_template(sos_schema_template_t t);
 dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);

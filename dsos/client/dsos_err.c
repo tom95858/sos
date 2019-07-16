@@ -103,22 +103,20 @@ void dsos_perror(const char *fmt, ...)
 	va_list	ap;
 
 	va_start(ap, fmt);
-	vprintf(fmt, ap);
+	vfprintf(stderr, fmt, ap);
 
-	printf("server  ");
+	fprintf(stderr, "server  ");
 	for (i = 0; i < g.num_servers; ++i)
-		printf("%2d ", i);
-	printf("\n");
+		fprintf(stderr, "%3d ", i);
+	fprintf(stderr, "\n");
 
-	printf("local:  ");
+	fprintf(stderr, "local:  ");
 	for (i = 0; i < g.num_servers; ++i)
-		printf("%02d ", dsos_err_get_local(dsos_errno, i));
-	printf("\n");
+		fprintf(stderr, "%03d ", dsos_err_get_local(dsos_errno, i));
+	fprintf(stderr, "\n");
 
-	printf("remote: ");
+	fprintf(stderr, "remote: ");
 	for (i = 0; i < g.num_servers; ++i)
-		printf("%02d ", dsos_err_get_remote(dsos_errno, i));
-	printf("\n");
-
-	fflush(stdout);
+		fprintf(stderr, "%03d ", dsos_err_get_remote(dsos_errno, i));
+	fprintf(stderr, "\n");
 }
