@@ -255,7 +255,10 @@ typedef struct ods_bkt_s {
 
 typedef struct ods_pgt_s {
 	char pg_signature[8];	 /* pgt signature 'PGTSTORE' */
-	char pg_commit_id[41];	 /* git SHA1 hash is 40B */
+	union {
+		char _pg_commit_id[41];	 /* git SHA1 hash is 40B */
+		uint8_t pg_opts[41];	 /* config options */
+	};
 	struct ods_version_s pg_vers; /* PGT version */
 	uint64_t pg_gen;	 /* generation number */
 	uint64_t pg_free;	 /* first free page number */

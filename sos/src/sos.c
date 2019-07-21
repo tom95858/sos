@@ -893,15 +893,30 @@ static void __pos_cleanup(sos_t sos)
 	ods_unlock(sos->pos_ods, 0);
 }
 
-struct sos_version_s sos_container_version(sos_t sos)
+int sos_container_file_version(const char *path, struct sos_version_s *ver)
 {
-	struct sos_version_s vers;
-	struct ods_version_s overs = ods_version(sos->schema_ods);
-	vers.major = overs.major;
-	vers.minor = overs.minor;
-	vers.fix = overs.fix;
-	vers.git_commit_id = overs.git_commit_id;
-	return vers;
+	char tmp_path[PATH_MAX];
+
+	if (strlen(path) >= SOS_PART_PATH_LEN)
+		return E2BIG;
+
+	if (path[0] != '/') {
+		if (!getcwd(tmp_path, sizeof(tmp_path)))
+			return errno;
+		if (strlen(tmp_path) + strlen(path) + 12 > SOS_PART_PATH_LEN)
+			return E2BIG;
+		strcat(tmp_path, "/");
+		strcat(tmp_path, path);
+	} else
+		strcpy(tmp_path, path);
+
+	strcat(tmp_path, "/.__index");
+	return ods_file_version(tmp_path, (struct ods_version_s *)ver);
+}
+
+void sos_container_version(sos_t sos, struct sos_version_s *ver)
+{
+	ods_version(sos->schema_ods, (struct ods_version_s *)ver);
 }
 
 /**

@@ -268,8 +268,10 @@ cdef class Container(SosObject):
             self.open(path, o_perm=o_perm)
 
     def version(self):
+        cdef sos_version_s vers
         if self.c_cont != NULL:
-            return sos_container_version(self.c_cont)
+            sos_container_version(self.c_cont, &vers)
+            return vers
         return None
 
     def open(self, path, o_perm=SOS_PERM_RW):
