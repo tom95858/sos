@@ -106,12 +106,12 @@ AC_CONFIG_FILES([
 		sos/Makefile
 		sos/include/Makefile
 		sos/src/Makefile
-		sos/python/Makefile
 		dsos/Makefile
 		dsos/include/Makefile
 		dsos/client/Makefile
 		dsos/server/Makefile
 		dsos/util/Makefile
+		dsos/python/Makefile
 		util/Makefile
 		util/json/Makefile
 		util/mmalloc/Makefile

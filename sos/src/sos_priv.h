@@ -195,7 +195,6 @@ struct sos_obj_s {
 	sos_schema_t schema;
 	sos_obj_ref_t obj_ref;
 	ods_obj_t obj;
-	void *ctxt;
 	LIST_ENTRY(sos_obj_s) entry;
 };
 #define SOS_OBJ(_o_) ODS_PTR(sos_obj_data_t, (_o_))
@@ -291,6 +290,11 @@ struct sos_schema_s {
 	LIST_ENTRY(sos_schema_s) entry;
 	TAILQ_HEAD(sos_index_list, sos_attr_s) idx_attr_list;
 	TAILQ_HEAD(sos_attr_list, sos_attr_s) attr_list;
+	/* DSOS state. */
+	struct {
+		void *cont;
+		uint64_t *handles;
+	} dsos;
 };
 
 typedef struct sos_idx_data_s {
@@ -398,6 +402,10 @@ struct sos_filter_s {
 	int miss_cnt;
 	int empty;
 	TAILQ_HEAD(sos_cond_list, sos_filter_cond_s) cond_list;
+	/* DSOS state. */
+	struct {
+		uint64_t *handles;
+	} dsos;
 };
 
 /**

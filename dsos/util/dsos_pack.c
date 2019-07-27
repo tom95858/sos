@@ -37,6 +37,26 @@ const char *dsos_rpc_type_to_str(int type)
 		return "DSOS_SCHEMA_ADD";
 	    case DSOS_RPC_SCHEMA_BY_NAME:
 		return "DSOS_SCHEMA_BY_NAME";
+	    case DSOS_RPC_SCHEMA_BY_ID:
+		return "DSOS_SCHEMA_BY_ID";
+	    case DSOS_RPC_SCHEMA_FIRST:
+		return "DSOS_SCHEMA_FIRST";
+	    case DSOS_RPC_SCHEMA_NEXT:
+		return "DSOS_SCHEMA_NEXT";
+	    case DSOS_RPC_FILTER_NEW:
+		return "DSOS_FILTER_NEW";
+	    case DSOS_RPC_FILTER_FREE:
+		return "DSOS_FILTER_FREE";
+	    case DSOS_RPC_FILTER_COND_ADD:
+		return "DSOS_FILTER_COND_ADD";
+	    case DSOS_RPC_FILTER_STEP:
+		return "DSOS_FILTER_STEP";
+	    case DSOS_RPC_FILTER_MISS_COUNT:
+		return "DSOS_FILTER_MISS_COUNT";
+	    case DSOS_RPC_FILTER_FLAGS_GET:
+		return "DSOS_FILTER_FLAGS_GET";
+	    case DSOS_RPC_FILTER_FLAGS_SET:
+		return "DSOS_FILTER_FLAGS_SET";
 	    default:
 		return "<invalid>";
 	}
@@ -303,9 +323,15 @@ int dsos_pack_schema(dsos_buf_t *buf, sos_schema_t schema)
 	sos_attr_t		attr, join_attr;
 	sos_schema_data_t	data = schema->data;
 
-	ret =  dsos_pack_str(buf, schema->data->name);
+#if 0
+	char *start = buf->p;
+	printf("Bo: packing %s at offset %d, %d available\n",
+	       schema->data->name, buf->p - (char *)buf->msg, buf->max_len - buf->len);
+#endif
+	ret  = dsos_pack_str(buf, schema->data->name);
 	ret |= dsos_pack_u32(buf, schema->data->attr_cnt);
 	TAILQ_FOREACH(attr, &schema->attr_list, entry) {
+//		printf("Bo: new attr: buf->p %p, %d available\n", buf->p, buf->max_len - buf->len);
 		ret |= dsos_pack_str(buf, attr->data->name);
 		ret |= dsos_pack_u32(buf, attr->data->type);
 		if (attr->data->el_sz)
@@ -314,11 +340,13 @@ int dsos_pack_schema(dsos_buf_t *buf, sos_schema_t schema)
 			ret |= dsos_pack_u32(buf, attr->data->size);
 		if (attr->ext_ptr) {
 			ret |= dsos_pack_u32(buf, attr->ext_ptr->count);
+//			printf("Bo: join attr: buf->p %p, %d available\n", buf->p, buf->max_len - buf->len);
 			for (i = 0; i < attr->ext_ptr->count; ++i) {
 				join_attr = sos_schema_attr_by_id(schema,
 								  attr->ext_ptr->data.uint32_[i]);
 				ret |= dsos_pack_str(buf, sos_attr_name(join_attr));
 			}
+//			printf("Bo: join attr done: buf->p %p, %d available\n", buf->p, buf->max_len - buf->len);
 		} else {
 			ret |= dsos_pack_u32(buf, 0);
 		}
@@ -327,6 +355,7 @@ int dsos_pack_schema(dsos_buf_t *buf, sos_schema_t schema)
 		ret |= dsos_pack_str(buf, attr->key_type);
 		ret |= dsos_pack_str(buf, attr->idx_args);
 	}
+//	printf("Bo: done packing %s ret %d buf->p %p len %d\n", schema->data->name, ret, buf->p, buf->p - start);
 	return ret;
 }
 

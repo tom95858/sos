@@ -89,8 +89,8 @@
  *
  * The flags are as follows and can be logically or'd together:
  *
- *   1. Flags for callback management: the callback_fn specified in the
- *      dsos_rpc_new() is called when a response message arrives for:
+ *   1. Flags for callback management: the callback_fn is called when
+ *      a response message arrives if the following are specified:
  *
  *        DSOS_RPC_CB_FIRST  - call on first response
  *        DSOS_RPC_CB_LAST   - call on last response
@@ -127,12 +127,14 @@
  *
  *        DSOS_RPC_PUT
  *
- * The DSOS server(s) destined for the requests(s) will send response
- * message(s) which contain the same 64-bit message IDs as the
- * request(s). The RPC layer uses a red-black tree to match up these
- * IDs. It is an error for a response message to be received that
- * cannot be matched with a request message. However, in the future
- * such unsolicited messages may be supported.
+ * Each DSOS server destined for the request(s) will send a response
+ * message which contains the same 64-bit message ID as the
+ * request. In an RPC vector, each request gets a different ID (i.e.,
+ * each server sees a different ID). The RPC layer uses a red-black
+ * tree to match up these IDs. It is an error for a response message
+ * to be received that cannot be matched with a request
+ * message. However, in the future such unsolicited messages may be
+ * supported.
  *
  * 3. PROCESS RPC RESULTS
  *
@@ -269,11 +271,17 @@ void dsos_rpc_put(dsos_rpc_t *rpc)
 	if (!ods_atomic_dec(&rpc->refcount)) {
 		dsos_debug("freeing rpc %p flags 0x%x num_servers %d\n", rpc, rpc->flags, rpc->num_servers);
 		for (i = 0; i < rpc->num_servers; ++i) {
-			if (rpc->bufs[i].req.free_fn && rpc->bufs[i].req.msg)
+			if (rpc->bufs[i].req.free_fn && rpc->bufs[i].req.msg) {
+#if 0
+				printf("Bo: freeing %p\n", rpc->bufs[i].req.msg);
+#endif
 				rpc->bufs[i].req.free_fn(rpc->bufs[i].req.msg);
+			}
 			if (rpc->bufs[i].resp.free_fn && rpc->bufs[i].resp.msg)
 				rpc->bufs[i].resp.free_fn(rpc->bufs[i].resp.msg);
 		}
+		if (rpc->flags & DSOS_RPC_FREE_STATUS)
+			dsos_err_free(rpc->status);
 		free(rpc->bufs);
 		free(rpc);
 	}
@@ -304,6 +312,18 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 	zap_ep_t	ep;
 	dsos_conn_t	*conn;
 	struct rpc_rbn	*rbn;
+
+	/*
+	 * Fail immediately if rpc->status contains any local
+	 * errors. This means there was an error during argument
+	 * packing.
+	 */
+	ret = dsos_err_status(rpc->status);
+	if (ret) {
+		dsos_err_free(dsos_errno);
+		dsos_errno = rpc->status;
+		return dsos_err_status(dsos_errno);
+	}
 
 	rpc->flags   |= flags;
 	rpc->num_pend = rpc->num_servers;
@@ -370,6 +390,8 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 		dsos_errno = rpc->status;
 		ret = dsos_err_status(dsos_errno);
 		dsos_debug("wait complete, status %d\n", ret);
+	} else {
+		rpc->flags |= DSOS_RPC_FREE_STATUS;
 	}
 
 	dsos_rpc_put(rpc);  /* free the ref taken above */
@@ -442,20 +464,28 @@ void dsos_rpc_handle_resp(dsos_conn_t *conn, dsos_msg_t *resp, size_t len)
 	if (first) flags |= DSOS_RPC_CB_FIRST;
 	if (last)  flags |= DSOS_RPC_CB_LAST;
 
+	/*
+	 * Warning: the RPC object is freed in one of two ways and care must
+	 * be taken to avoid dangling references below.
+	 *
+	 * First, the caller's callback can do the final dsos_rpc_put(),
+	 * and in that case we assume flags does not contain DSOS_RPC_PUT
+	 * or DSOS_RPC_WAIT. It is an error if the caller does otherwise.
+	 * To allow for this, do not access rpc after the callback returns.
+	 *
+	 * Second, the caller can specify DSOS_RPC_PUT, and unless they have
+	 * obtained another reference on rpc, the final put is done below.
+	 */
+
+	rpc_flags = rpc->flags;
+
 	if (rpc->cb && ((flags & rpc->flags) || DSOS_RPC_CB_ALL))
 		rpc->cb(rpc, flags, &buf->resp, conn->server_id, rpc->ctxt);
-
-	/*
-	 * Note: if the caller is going to do the final dsos_rpc_put(),
-	 * they must not set DSOS_RPC_PUT, and the put can happen any time
-	 * after the following sem_post(), so do not access rpc after
-	 * the sem_post() below.
-	 */
-	rpc_flags = rpc->flags;
-	sem_post(&rpc->sem);
-
+	if (rpc_flags & DSOS_RPC_WAIT)
+		sem_post(&rpc->sem);
 	if (last && (rpc_flags & DSOS_RPC_PUT))
 		dsos_rpc_put(rpc);
+
 	free(rbn);
 	dsos_debug("done\n");
 }
@@ -773,5 +803,52 @@ void dsos_rpc_pack_key_all(dsos_rpc_t *rpc, sos_key_t key)
 			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
+	}
+}
+
+void dsos_rpc_pack_attr_all(dsos_rpc_t *rpc, sos_attr_t attr)
+{
+	int	i, ret, server_num;
+
+	assert(rpc->flags & DSOS_RPC_ALL);
+
+	if (attr->schema->dsos.handles == NULL) {
+		dsos_err_set_local_all(rpc->status, EINVAL);
+		return;
+	}
+
+	for (i = 0; i < g.num_servers; ++i) {
+		ret  = dsos_pack_handle(&rpc->bufs[i].req, attr->schema->dsos.handles[i]);
+		ret |= dsos_pack_u32(&rpc->bufs[i].req, attr->data->id);
+		if (ret) {
+			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			dsos_err_set_local(rpc->status, i, E2BIG);
+		}
+	}
+}
+
+void dsos_rpc_pack_value_all(dsos_rpc_t *rpc, sos_value_t value)
+{
+	int	i, ret, server_num;
+
+	assert(rpc->flags & DSOS_RPC_ALL);
+
+	if (value->attr->schema->dsos.handles == NULL) {
+		dsos_err_set_local_all(rpc->status, EINVAL);
+		return;
+	}
+
+	dsos_rpc_pack_attr_all(rpc, value->attr);
+
+	for (i = 0; i < g.num_servers; ++i) {
+		int	len  = sos_value_strlen(value) + 1;
+		char	*str = dsos_malloc(len);
+		sos_value_to_str(value, str, len);
+		ret = dsos_pack_str(&rpc->bufs[i].req, str);
+		if (ret) {
+			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			dsos_err_set_local(rpc->status, i, E2BIG);
+		}
+		free(str);
 	}
 }

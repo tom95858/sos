@@ -73,29 +73,45 @@ dsos_t *dsos_container_open(const char *path, sos_perm_t perms)
 		goto out;
 
 	cont = (dsos_t *)dsos_malloc(sizeof(dsos_t));
-
 	cont->handles = dsos_rpc_unpack_handles(rpc);
  out:
 	dsos_rpc_put(rpc);
 	return cont;
 }
 
-int dsos_container_close(dsos_t *cont)
+void dsos_container_close(dsos_t *cont, int commit)
 {
 	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_CONT_CLOSE);
 
 	dsos_rpc_pack_handles(rpc, cont->handles);
+	dsos_rpc_pack_u32_all(rpc, commit);
 
 	free(cont->handles);
 	free(cont);
 
-	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
+	dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
-dsos_schema_t *dsos_schema_by_name(dsos_t *cont, const char *name)
+/* For debug, verify sameness of all returned schema. */
+static void compare_all_returned_schema(dsos_rpc_t *rpc)
+{
+#if 1
+	int	i;
+
+	for (i = 0; i < g.num_servers; ++i) {
+		void *buf1 = rpc->bufs[0].resp.msg + 1;
+		void *buf2 = rpc->bufs[i].resp.msg + 1;
+		if (memcmp(buf1, buf2, rpc->bufs[0].resp.len - sizeof(dsos_msg_hdr_t)))
+			dsos_error("schema from servers 0 and %d differ\n", i);
+	}
+#endif
+}
+
+sos_schema_t dsos_schema_by_name(dsos_t *cont, const char *name)
 {
 	int		i, ret;
-	dsos_schema_t	*schema = NULL;
+	uint64_t	*handles;
+	sos_schema_t	schema = NULL;
 	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_BY_NAME);
 
 	dsos_rpc_pack_handles(rpc, cont->handles);
@@ -105,57 +121,111 @@ dsos_schema_t *dsos_schema_by_name(dsos_t *cont, const char *name)
 	if (ret)
 		goto out;
 
-	schema = (dsos_schema_t *)dsos_malloc(sizeof(dsos_schema_t));
+	handles = dsos_rpc_unpack_handles(rpc);
+	schema  = dsos_rpc_unpack_schema_one(rpc, 0);
 
-	schema->handles    = dsos_rpc_unpack_handles(rpc);
-	schema->sos_schema = dsos_rpc_unpack_schema_one(rpc, 0);
-	schema->cont       = cont;
-#if 1
-	/* Enable for debug: verify that all returned schema are identical. */
-	for (i = 0; i < g.num_servers; ++i) {
-		void *buf1 = rpc->bufs[0].resp.msg + 1;
-		void *buf2 = rpc->bufs[i].resp.msg + 1;
-		if (memcmp(buf1, buf2, rpc->bufs[0].resp.len - sizeof(dsos_msg_hdr_t)))
-			dsos_error("schema from servers 0 and %d differ\n", i);
-	}
-#endif
+	schema->dsos.handles = handles;
+	schema->dsos.cont    = cont;
+
+	compare_all_returned_schema(rpc);
  out:
 	dsos_rpc_put(rpc);
 	return schema;
 }
 
-int dsos_schema_add(dsos_t *cont, dsos_schema_t *schema)
+sos_schema_t dsos_schema_by_id(dsos_t *cont, int id)
 {
-	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_ADD);
+	int		i, ret;
+	uint64_t	*handles;
+	sos_schema_t	schema = NULL;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_BY_ID);
 
 	dsos_rpc_pack_handles(rpc, cont->handles);
-	dsos_rpc_pack_handles(rpc, schema->handles);
-
-	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
-}
-
-dsos_schema_t *dsos_schema_from_template(sos_schema_template_t t)
-{
-	int		ret;
-	sos_schema_t	sos_schema;
-	dsos_schema_t	*schema = NULL;
-	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_FROM_TEMPLATE);
-
-	sos_schema = sos_schema_from_template(t);
-
-	dsos_rpc_pack_schema_all(rpc, sos_schema);
+	dsos_rpc_pack_u32_all(rpc, id);
 
 	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
 		goto out;
 
-	schema = (dsos_schema_t *)dsos_malloc(sizeof(dsos_schema_t));
+	handles = dsos_rpc_unpack_handles(rpc);
+	schema  = dsos_rpc_unpack_schema_one(rpc, 0);
 
-	schema->handles = dsos_rpc_unpack_handles(rpc);
-	schema->sos_schema = sos_schema;
+	schema->dsos.handles = handles;
+	schema->dsos.cont    = cont;
+
+	compare_all_returned_schema(rpc);
  out:
 	dsos_rpc_put(rpc);
 	return schema;
+}
+
+int dsos_schema_add(dsos_t *cont, sos_schema_t schema)
+{
+	int		ret;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_ADD);
+
+	dsos_rpc_pack_handles(rpc, cont->handles);
+	dsos_rpc_pack_schema_all(rpc, schema);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
+	if (ret)
+		goto out;
+
+	schema->dsos.cont    = cont;
+	schema->dsos.handles = dsos_rpc_unpack_handles(rpc);
+ out:
+	dsos_rpc_put(rpc);
+	return ret;
+}
+
+sos_schema_t dsos_schema_first(dsos_t *cont)
+{
+	int		i, ret;
+	uint64_t	*handles;
+	sos_schema_t	schema = NULL;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_FIRST);
+
+	dsos_rpc_pack_handles(rpc, cont->handles);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
+	if (ret)
+		goto out;
+
+	handles = dsos_rpc_unpack_handles(rpc);
+	schema  = dsos_rpc_unpack_schema_one(rpc, 0);
+
+	schema->dsos.handles = handles;
+	schema->dsos.cont    = cont;
+
+	compare_all_returned_schema(rpc);
+ out:
+	dsos_rpc_put(rpc);
+	return schema;
+}
+
+sos_schema_t dsos_schema_next(sos_schema_t schema)
+{
+	int		i, ret;
+	uint64_t	*handles;
+	sos_schema_t	next_schema = NULL;
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_SCHEMA_NEXT);
+
+	dsos_rpc_pack_handles(rpc, schema->dsos.handles);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
+	if (ret)
+		goto out;
+
+	handles     = dsos_rpc_unpack_handles(rpc);
+	next_schema = dsos_rpc_unpack_schema_one(rpc, 0);
+
+	next_schema->dsos.handles = handles;
+	next_schema->dsos.cont    = schema->dsos.cont;
+
+	compare_all_returned_schema(rpc);
+ out:
+	dsos_rpc_put(rpc);
+	return next_schema;
 }
 
 int dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path)
@@ -245,18 +315,52 @@ static sos_obj_t iter_rbt_min(dsos_iter_t *iter)
 	return obj;
 }
 
-static sos_obj_t iter_remove_min(dsos_iter_t *iter)
+static sos_obj_t iter_get_min(dsos_iter_t *iter)
 {
-	sos_obj_t	obj;
+	sos_obj_t	obj = NULL;
+	struct iter_rbn	*rbn;
 
-	obj = iter_rbt_min(iter);
+	rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
+	if (rbn) {
+		obj = rbn->obj;
+		dsos_debug("iter %p min value %ld obj_id %08lx%08lx\n",
+			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_,
+			   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
+	} else {
+		dsos_debug("iter %p rbt empty\n", iter);
+	}
 	if (!obj) {
 		iter->done = 1;
 		iter->last_server = -1;
-		return NULL;
 	}
-	iter->last_server = dsos_obj_server(obj);
 	return obj;
+}
+
+static void iter_remove_min(dsos_iter_t *iter)
+{
+	sos_obj_t	obj;
+	struct iter_rbn	*rbn;
+
+	rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
+	if (rbn) {
+		obj = rbn->obj;
+		dsos_debug("iter %p min value %ld obj_id %08lx%08lx\n",
+			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_,
+			   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
+		rbt_del(&iter->rbt, (struct rbn *)rbn);
+		sos_value_put(rbn->rbn.key);
+		sos_value_free(rbn->rbn.key);
+		free(rbn);
+	} else {
+		dsos_debug("iter %p rbt empty\n", iter);
+	}
+	if (!obj) {
+		iter->done = 1;
+		iter->last_server = -1;
+	} else {
+		iter->last_server = dsos_obj_server(obj);
+		sos_obj_put(obj);
+	}
 }
 
 static int iter_reset(dsos_iter_t *iter)
@@ -328,17 +432,17 @@ static void iter_prefetch_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t
 	pthread_mutex_unlock(&iter->lock);
 }
 
-static int iter_prefetch(dsos_iter_t *iter, int server_num)
+static int iter_prefetch(dsos_iter_t *iter, int server_num, dsos_rpc_type_t rpc_type, int op)
 {
 	sos_obj_t	obj;
-	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ONE, DSOS_RPC_ITER_STEP);
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ONE, rpc_type);
 
 	if (iter->done)
 		return 0;
 
 	obj = dsos_obj_malloc(iter->schema);
 
-	dsos_rpc_pack_u32_one(rpc, DSOS_RPC_ITER_OP_NEXT);
+	dsos_rpc_pack_u32_one(rpc, op);
 	dsos_rpc_pack_handle(rpc, iter->handles[server_num]);
 	dsos_rpc_pack_obj_ptr(rpc, obj);
 	dsos_rpc_pack_key_one(rpc, NULL);
@@ -353,14 +457,15 @@ static int iter_prefetch(dsos_iter_t *iter, int server_num)
 	return dsos_rpc_send_cb(rpc, DSOS_RPC_CB | DSOS_RPC_PUT, iter_prefetch_cb, iter);
 }
 
-dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
+dsos_iter_t *dsos_attr_iter_new(sos_attr_t attr)
 {
 	int		ret;
 	dsos_iter_t	*iter = NULL;
+	sos_schema_t	schema = sos_attr_schema(attr);
 	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_NEW);
 
 	dsos_rpc_pack_u32_all(rpc, sos_attr_id(attr));
-	dsos_rpc_pack_handles(rpc, schema->handles);
+	dsos_rpc_pack_handles(rpc, schema->dsos.handles);
 
 	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
 	if (ret)
@@ -375,7 +480,7 @@ dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
 	iter->done        = 0;
 	iter->status      = 0;
 	iter->last_server = -1;
-	iter->obj_sz      = schema->sos_schema->data->obj_sz + schema->sos_schema->data->array_data_sz;
+	iter->obj_sz      = schema->data->obj_sz + schema->data->array_data_sz;
 	pthread_mutex_init(&iter->lock, 0);
 	pthread_cond_init(&iter->prefetch_complete, NULL);
 	rbt_init(&iter->rbt, iter_rbn_cmp_fn);
@@ -384,7 +489,7 @@ dsos_iter_t *dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr)
 	return iter;
 }
 
-int dsos_iter_close(dsos_iter_t *iter)
+void dsos_iter_free(dsos_iter_t *iter)
 {
 	sos_obj_t	obj;
 	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_CLOSE);
@@ -396,7 +501,7 @@ int dsos_iter_close(dsos_iter_t *iter)
 	free(iter->handles);
 	free(iter);
 
-	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
+	dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
 }
 
 static void iter_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t *buf, int server_num, void *ctxt)
@@ -427,11 +532,11 @@ static void iter_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t *buf, in
 	}
 }
 
-sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
+static int iter_begin(dsos_iter_t *iter, dsos_rpc_type_t rpc_type, int op)
 {
 	int		i, ret;
 	sos_obj_t	obj = NULL, *objs;
-	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_ITER_STEP);
+	dsos_rpc_t	*rpc = dsos_rpc_new(DSOS_RPC_ALL, rpc_type);
 
 	pthread_mutex_lock(&iter->lock);
 	ret = iter_reset(iter);
@@ -439,7 +544,7 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 
 	objs = dsos_obj_calloc(g.num_servers, iter->schema);
 
-	dsos_rpc_pack_u32_all(rpc, DSOS_RPC_ITER_OP_BEGIN);
+	dsos_rpc_pack_u32_all(rpc, op);
 	dsos_rpc_pack_handles(rpc, iter->handles);
 	dsos_rpc_pack_obj_ptrs(rpc, objs);
 	dsos_rpc_pack_key_all(rpc, NULL);
@@ -451,56 +556,81 @@ sos_obj_t dsos_iter_begin(dsos_iter_t *iter)
 		goto out;
 
 	pthread_mutex_lock(&iter->lock);
-	obj = iter_remove_min(iter);
-#ifdef ITER_PREFETCH
-	if (obj)
-		iter_prefetch(iter, dsos_obj_server(obj));
-#endif
+	obj = iter_get_min(iter);
 	pthread_mutex_unlock(&iter->lock);
  out:
 	free(objs);
+	return obj ? 0 : ENOENT;
+}
+
+int dsos_iter_begin(dsos_iter_t *iter)
+{
+	return iter_begin(iter, DSOS_RPC_ITER_STEP, DSOS_RPC_ITER_OP_BEGIN);
+}
+
+sos_obj_t dsos_filter_begin(dsos_filter_t *filter)
+{
+	iter_begin(filter->iter, DSOS_RPC_FILTER_STEP, DSOS_RPC_FILTER_OP_BEGIN);
+	return dsos_iter_obj(filter->iter);
+}
+
+sos_obj_t dsos_iter_obj(dsos_iter_t *iter)
+{
+	sos_obj_t	obj;
+
+	pthread_mutex_lock(&iter->lock);
+	obj = iter_get_min(iter);
+	pthread_mutex_unlock(&iter->lock);
+
+	if (obj)
+		sos_obj_get(obj);  // caller must put this ref
+
 	return obj;
 }
 
-sos_obj_t dsos_iter_next(dsos_iter_t *iter)
+static int iter_next(dsos_iter_t *iter, dsos_rpc_type_t rpc_type, int op)
 {
 	int		ret;
-	sos_obj_t	obj;
+	sos_obj_t	obj = NULL;
 
 	pthread_mutex_lock(&iter->lock);
 
 	dsos_debug("iter %p prefetch_rpc %p\n", iter, iter->prefetch_rpc);
 
-	if (iter->done) {
-		pthread_mutex_unlock(&iter->lock);
-		return NULL;
-	}
+	if (iter->done)
+		goto out;
+
+	iter_remove_min(iter);
 
 #ifndef ITER_PREFETCH
 	assert(iter->last_server != -1);
-	iter_prefetch(iter, iter->last_server);
+	iter_prefetch(iter, iter->last_server, rpc_type, op);
 #endif
 	/* Wait for the previously prefetched object. */
 	while (iter->prefetch_rpc)
 		pthread_cond_wait(&iter->prefetch_complete, &iter->lock);
 
-	if (iter->status) {
-		pthread_mutex_unlock(&iter->lock);
-		return NULL;
-	}
+	if (iter->status)
+		goto out;
 
-	obj = iter_remove_min(iter);
-#ifdef ITER_PREFETCH
-	if (obj)
-		iter_prefetch(iter, dsos_obj_server(obj));
-#endif
-
+	obj = iter_get_min(iter);
+ out:
 	pthread_mutex_unlock(&iter->lock);
-
-	return obj;
+	return obj ? 0 : ENOENT;
 }
 
-sos_obj_t dsos_iter_find(dsos_iter_t *iter, sos_key_t key)
+int dsos_iter_next(dsos_iter_t *iter)
+{
+	return iter_next(iter, DSOS_RPC_ITER_STEP, DSOS_RPC_ITER_OP_NEXT);
+}
+
+sos_obj_t dsos_filter_next(dsos_filter_t *filter)
+{
+	iter_next(filter->iter, DSOS_RPC_FILTER_STEP, DSOS_RPC_FILTER_OP_NEXT);
+	return dsos_iter_obj(filter->iter);
+}
+
+int dsos_iter_find(dsos_iter_t *iter, sos_key_t key)
 {
 	int		i, ret;
 	sos_obj_t	obj = NULL, *objs;
@@ -524,9 +654,398 @@ sos_obj_t dsos_iter_find(dsos_iter_t *iter, sos_key_t key)
 		goto out;
 
 	pthread_mutex_lock(&iter->lock);
-	obj = iter_remove_min(iter);
+	obj = iter_get_min(iter);
 	pthread_mutex_unlock(&iter->lock);
  out:
 	free(objs);
-	return obj;
+	return obj ? 0 : ENOENT;
+}
+
+int dsos_iter_end(dsos_iter_t *iter)
+{
+	return ENOSYS;
+}
+
+int dsos_iter_sup(dsos_iter_t *iter, sos_key_t key)
+{
+	return ENOSYS;
+}
+
+int dsos_iter_inf(dsos_iter_t *iter, sos_key_t key)
+{
+	return ENOSYS;
+}
+
+sos_key_t dsos_iter_key(dsos_iter_t *iter)
+{
+	return NULL;
+}
+
+sos_iter_flags_t dsos_iter_flags_get(dsos_iter_t *iter)
+{
+	return 0;
+}
+
+void dsos_iter_flags_set(dsos_iter_t *iter, sos_iter_flags_t flags)
+{
+}
+
+int dsos_iter_pos_get(dsos_iter_t *iter, sos_pos_t *pos)
+{
+	return ENOSYS;
+}
+
+int dsos_iter_pos_put(dsos_iter_t *iter, sos_pos_t pos)
+{
+	return ENOSYS;
+}
+
+int dsos_iter_pos_set(dsos_iter_t *iter, sos_pos_t pos)
+{
+	return ENOSYS;
+}
+
+int dsos_iter_prev(dsos_iter_t *iter)
+{
+	return ENOSYS;
+}
+
+/* Indices */
+
+int dsos_attr_is_indexed(sos_attr_t attr)
+{
+	return attr->data->indexed;
+}
+
+dsos_index_t *dsos_attr_index(sos_attr_t attr)
+{
+	return NULL;
+}
+
+sos_obj_t dsos_index_find(dsos_index_t *index, sos_key_t key)
+{
+	return NULL;
+}
+
+int dsos_index_find_ref(dsos_index_t *index, sos_key_t key, sos_obj_ref_t *ref)
+{
+	return ENOSYS;
+}
+
+sos_obj_t dsos_index_find_inf(dsos_index_t *index, sos_key_t key)
+{
+	return NULL;
+}
+
+sos_obj_t dsos_index_find_sup(dsos_index_t *index, sos_key_t key)
+{
+	return NULL;
+}
+
+sos_obj_t dsos_index_find_min(dsos_index_t *index, sos_key_t *key)
+{
+	return NULL;
+}
+
+sos_obj_t dsos_index_find_max(dsos_index_t *index, sos_key_t *key)
+{
+	return NULL;
+}
+
+int dsos_index_find_min_ref(dsos_index_t *index, sos_key_t *key, sos_obj_ref_t *ref)
+{
+	return ENOSYS;
+}
+
+int dsos_index_find_max_ref(dsos_index_t *index, sos_key_t *key, sos_obj_ref_t *ref)
+{
+	return ENOSYS;
+}
+
+int dsos_index_stat(dsos_index_t *index, sos_index_stat_t stats)
+{
+	return ENOSYS;
+}
+
+void dsos_index_print(dsos_index_t *index, FILE *f)
+{
+}
+
+/* Containers -- not implemented */
+
+int dsos_container_commit(dsos_t *cont, int commit)
+{
+	return ENOSYS;
+}
+
+int dsos_container_version(dsos_t *cont)
+{
+	return ENOSYS;
+}
+
+dsos_container_index_iter_t *dsos_container_index_iter_new(dsos_t *cont)
+{
+	return NULL;
+}
+
+dsos_index_t *dsos_container_index_iter_first(dsos_container_index_iter_t *cont_iter)
+{
+	return NULL;
+}
+
+dsos_index_t *dsos_container_index_iter_next(dsos_container_index_iter_t *cont_iter)
+{
+	return NULL;
+}
+
+void dsos_container_index_iter_free(dsos_container_index_iter_t *cont_iter)
+{
+}
+
+/* Indices -- not implemented */
+
+int dsos_obj_index(sos_obj_t obj)
+{
+	return ENOSYS;
+}
+
+int dsos_obj_remove(sos_obj_t obj)
+{
+	return ENOSYS;
+}
+
+int dsos_index_new(dsos_t *cont, const char *name, const char *idx_type,
+          sos_type_t key_type, const char *args)
+{
+	return ENOSYS;
+}
+
+dsos_index_t *dsos_index_open(dsos_t *cont, const char *name)
+{
+	return NULL;
+}
+
+int dsos_index_insert(dsos_index_t *index, sos_key_t key, sos_obj_t obj)
+{
+	return ENOSYS;
+}
+
+int dsos_index_remove(dsos_index_t *index, sos_key_t key, sos_obj_t obj)
+{
+	return ENOSYS;
+}
+
+const char *dsos_index_name(dsos_index_t *index)
+{
+	return NULL;
+}
+
+sos_type_t dsos_index_key_type(dsos_index_t *index)
+{
+	return 0;
+}
+
+int dsos_index_insert_ref(dsos_index_t *index, sos_key_t key, sos_obj_ref_t ref)
+{
+	return ENOSYS;
+}
+
+int dsos_index_remove_ref(dsos_index_t *index, sos_key_t key, sos_obj_ref_t *ref)
+{
+	return ENOSYS;
+}
+
+/* Partitions -- not implemented */
+
+int dsos_part_id(dsos_part_t *part)
+{
+	return ENOSYS;
+}
+
+char *dsos_part_name(dsos_part_t *part)
+{
+	return NULL;
+}
+
+char *dsos_part_path(dsos_part_t *part)
+{
+	return NULL;
+}
+
+int dsos_part_delete(dsos_part_t *part)
+{
+	return ENOSYS;
+}
+
+int dsos_part_move(dsos_part_t *part, const char *new_path)
+{
+	return ENOSYS;
+}
+
+int dsos_part_export(dsos_part_t *part, dsos_t *dst_cont, int reindex)
+{
+	return ENOSYS;
+}
+
+int dsos_part_index(dsos_part_t *part)
+{
+	return ENOSYS;
+}
+
+void dsos_part_put(dsos_part_t *part)
+{
+}
+
+dsos_part_iter_t *dsos_part_iter_new(dsos_t *cont)
+{
+	return NULL;
+}
+
+dsos_part_t *dsos_part_first(dsos_part_iter_t *part_iter)
+{
+	return NULL;
+}
+
+dsos_part_t *dsos_part_next(dsos_part_iter_t *part_iter)
+{
+	return NULL;
+}
+
+void dsos_part_iter_free(dsos_part_iter_t *part_iter)
+{
+}
+
+int dsos_part_stat(dsos_part_t *part, struct sos_part_stat_s *stats)
+{
+	return ENOSYS;
+}
+
+int dsos_part_state(dsos_part_t *part)
+{
+	return ENOSYS;
+}
+
+/* Filters */
+
+char *dsos_pos_to_str(sos_pos_t pos)
+{
+	return NULL;
+}
+
+int dsos_pos_from_str(sos_pos_t *pos, const char *str)
+{
+	return ENOSYS;
+}
+
+int dsos_filter_pos_get(dsos_filter_t *filter, sos_pos_t *pos)
+{
+	return ENOSYS;
+}
+
+int dsos_filter_pos_set(dsos_filter_t *filter, sos_pos_t pos)
+{
+	return ENOSYS;
+}
+
+int dsos_filter_pos_put(dsos_filter_t *filter, sos_pos_t pos)
+{
+	return ENOSYS;
+}
+
+dsos_filter_t *dsos_filter_new(dsos_iter_t *iter)
+{
+	int		ret;
+	dsos_filter_t	*filter;
+	dsos_rpc_t	*rpc  = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_FILTER_NEW);
+
+	dsos_rpc_pack_handles(rpc, iter->handles);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
+	if (ret)
+		goto out;
+
+	filter = (dsos_filter_t *)dsos_malloc(sizeof(dsos_filter_t));
+	filter->iter          = iter;
+	filter->iter->handles = dsos_rpc_unpack_handles(rpc);
+ out:
+	dsos_rpc_put(rpc);
+	return filter;
+}
+
+void dsos_filter_free(dsos_filter_t *filter)
+{
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_FILTER_FREE);
+
+	dsos_rpc_pack_handles(rpc, filter->iter->handles);
+
+	free(filter->iter);
+	free(filter);
+
+	dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
+}
+
+int dsos_filter_cond_add(dsos_filter_t *filter, sos_attr_t attr, sos_cond_t cond, sos_value_t value)
+{
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_FILTER_COND_ADD);
+
+	dsos_rpc_pack_handles(rpc, filter->iter->handles);
+	dsos_rpc_pack_attr_all(rpc, attr);
+	dsos_rpc_pack_u32_all(rpc, cond);
+	dsos_rpc_pack_value_all(rpc, value);
+
+	return dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
+}
+
+sos_iter_flags_t dsos_filter_flags_get(dsos_filter_t *filter)
+{
+	int		ret;
+	dsos_rpc_t	*rpc  = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_FILTER_FLAGS_GET);
+
+	dsos_rpc_pack_handles(rpc, filter->iter->handles);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
+	if (ret)
+		return 0;
+	ret = dsos_rpc_unpack_u32(rpc);
+	dsos_rpc_put(rpc);
+	return ret;
+}
+
+void dsos_filter_flags_set(dsos_filter_t *filter, sos_iter_flags_t flags)
+{
+	dsos_rpc_t *rpc = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_FILTER_FLAGS_SET);
+
+	dsos_rpc_pack_u32_all(rpc, flags);
+
+	dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT);
+}
+
+sos_obj_t dsos_filter_end(dsos_filter_t *filter)
+{
+	return NULL;
+}
+
+sos_obj_t dsos_filter_prev(dsos_filter_t *filter)
+{
+	return NULL;
+}
+
+sos_obj_t dsos_filter_obj(dsos_filter_t *filter)
+{
+	return dsos_iter_obj(filter->iter);
+}
+
+int dsos_filter_miss_count(dsos_filter_t *filter)
+{
+	int		ret;
+	dsos_rpc_t	*rpc  = dsos_rpc_new(DSOS_RPC_ALL, DSOS_RPC_FILTER_MISS_COUNT);
+
+	dsos_rpc_pack_handles(rpc, filter->iter->handles);
+
+	ret = dsos_rpc_send(rpc, DSOS_RPC_WAIT | DSOS_RPC_PERSIST_RESPONSES);
+	if (ret)
+		return 0;
+	ret = dsos_rpc_unpack_u32(rpc);
+	dsos_rpc_put(rpc);
+	return ret;
 }

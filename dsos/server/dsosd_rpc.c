@@ -231,3 +231,25 @@ sos_key_t dsosd_rpc_unpack_key(dsosd_rpc_t *rpc)
 {
 	return dsos_unpack_key(&rpc->req);
 }
+
+sos_attr_t dsosd_rpc_unpack_attr(dsosd_rpc_t *rpc)
+{
+	sos_schema_t	schema  = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA);
+	uint32_t	attr_id = dsos_unpack_u32(&rpc->req);
+
+	if (!schema)
+		return NULL;
+	return sos_schema_attr_by_id(schema, attr_id);
+}
+
+sos_value_t dsosd_rpc_unpack_value(dsosd_rpc_t *rpc)
+{
+	sos_attr_t	attr = dsosd_rpc_unpack_attr(rpc);
+	char		*str = dsos_unpack_str(&rpc->req);
+	sos_value_t	value;
+
+	value = sos_value_new();
+	value = sos_value_init(value, NULL, attr);
+	sos_value_from_str(value, str, NULL);
+	return value;
+}

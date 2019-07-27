@@ -7,6 +7,10 @@ typedef struct dsos_s		dsos_t;
 typedef struct dsos_part_s	dsos_part_t;
 typedef struct dsos_schema_s	dsos_schema_t;
 typedef struct dsos_iter_s	dsos_iter_t;
+typedef struct dsos_index_s	dsos_index_t;
+typedef struct dsos_filter_s	dsos_filter_t;
+typedef struct dsos_part_iter_s	dsos_part_iter_t;
+typedef struct dsos_container_index_iter_s	dsos_container_index_iter_t;
 typedef void (*dsos_obj_cb_t)(sos_obj_t, void *);
 
 struct dsos_ping_stats {
@@ -29,26 +33,6 @@ struct dsos_ping_stats {
  */
 typedef uint64_t	dsos_handle_t;
 
-/*
- * A DSOS object id is unique within a distributed container. The top
- * uint32_t identifies the server where the object resides, and the
- * bottom uint32_t is the object ref which identifies the object within
- * its container on that server. This overlays the original (local) SOS
- * obj id of the same size; it overloads the ODS ref part to store
- * the server ref. The ODS ref is not needed because it is now
- * implied from the container, and from the assumption that the container
- * in DSOS has only one partition.
- */
-typedef struct {
-	union {
-		struct {
-			uint64_t	serv;    // owning server
-			uint64_t	obj;     // ref inside the ODS
-		};
-		sos_obj_ref_t		as_ref;
-	};
-} dsos_obj_id_t;
-
 enum {
 	DSOS_ERR_LOCAL  = 1,
 	DSOS_ERR_REMOTE = 2
@@ -60,43 +44,113 @@ typedef struct dsos_err_s {
 
 /*
  * DSOS version of errno. This is a thread-local vector of
- * g.num_servers statuses of both of the local and remote operations
+ * g.num_servers statuses of both the local and remote operations
  * performed for the most recent DSOS API call.
  */
 extern __thread dsos_err_t	dsos_errno;
 
-int		dsos_container_close(dsos_t *dsos);
+int		dsos_attr_is_indexed(sos_attr_t attr);
+dsos_index_t	*dsos_attr_index(sos_attr_t attr);
+dsos_iter_t	*dsos_attr_iter_new(sos_attr_t attr);
+void		dsos_container_close(dsos_t *cont, int commit);
+int		dsos_container_commit(dsos_t *cont, int commit);
 dsos_t		*dsos_container_open(const char *path, sos_perm_t perms);
 int		dsos_container_new(const char *path, int mode);
-void		dsos_disconnect(void);
+int		dsos_container_version(dsos_t *cont);
+dsos_container_index_iter_t *dsos_container_index_iter_new(dsos_t *cont);
+dsos_index_t	*dsos_container_index_iter_first(dsos_container_index_iter_t *cont_iter);
+dsos_index_t	*dsos_container_index_iter_next(dsos_container_index_iter_t *cont_iter);
+void		dsos_container_index_iter_free(dsos_container_index_iter_t *cont_iter);
+void		dsos_disconnect();
 void		dsos_err_clear(dsos_err_t err);
 void		dsos_err_free(dsos_err_t err);
 int		dsos_err_get_local(dsos_err_t err, int server_num);
 int		dsos_err_get_remote(dsos_err_t err, int server_num);
-dsos_err_t	dsos_err_new(void);
-int		dsos_err_set(dsos_err_t to, dsos_err_t from);
-void		dsos_err_set_local_all(dsos_err_t to, int status);
+dsos_err_t	dsos_err_new();
+int		dsos_err_set(dsos_err_t err_to, dsos_err_t err_from);
+void		dsos_err_set_local_all(dsos_err_t err_to, int status);
 void		dsos_err_set_local(dsos_err_t err, int server_num, int status);
 void		dsos_err_set_remote(dsos_err_t err, int server_num, int status);
 int		dsos_err_status(dsos_err_t err);
+int		dsos_filter_cond_add(dsos_filter_t *f, sos_attr_t attr,
+				     enum sos_cond_e cond_e, sos_value_t value);
+dsos_filter_t	*dsos_filter_new(dsos_iter_t *iter);
+sos_iter_flags_t dsos_filter_flags_get(dsos_filter_t *filter);
+void		dsos_filter_flags_set(dsos_filter_t *filter, sos_iter_flags_t flags);
+sos_obj_t	dsos_filter_begin(dsos_filter_t *filter);
+sos_obj_t	dsos_filter_end(dsos_filter_t *filter);
+sos_obj_t	dsos_filter_next(dsos_filter_t *filter);
+int		dsos_filter_pos_get(dsos_filter_t *filter, sos_pos_t *pos);
+int		dsos_filter_pos_put(dsos_filter_t *filter, sos_pos_t pos);
+int		dsos_filter_pos_set(dsos_filter_t *filter, sos_pos_t pos);
+sos_obj_t	dsos_filter_prev(dsos_filter_t *filter);
+int		dsos_filter_miss_count(dsos_filter_t *filter);
+sos_obj_t	dsos_filter_obj(dsos_filter_t *filter);
+int		dsos_filter_pos_get(dsos_filter_t *filter, sos_pos_t *pos);
+void		dsos_filter_free(dsos_filter_t *filter);
+int		dsos_index_new(dsos_t *cont, const char *name, const char *idx_type,
+			       sos_type_t key_type, const char *args);
+dsos_index_t	*dsos_index_open(dsos_t *cont, const char *name);
+int		dsos_index_insert(dsos_index_t *index, sos_key_t key, sos_obj_t obj);
+int		dsos_index_remove(dsos_index_t *index, sos_key_t key, sos_obj_t obj);
+int		dsos_index_insert_ref(dsos_index_t *index, sos_key_t key, sos_obj_ref_t ref);
+int		dsos_index_remove_ref(dsos_index_t *index, sos_key_t key, sos_obj_ref_t *ref);
+sos_obj_t	dsos_index_find(dsos_index_t *index, sos_key_t key);
+int		dsos_index_find_ref(dsos_index_t *index, sos_key_t key, sos_obj_ref_t *ref);
+sos_obj_t	dsos_index_find_inf(dsos_index_t *index, sos_key_t key);
+sos_obj_t	dsos_index_find_sup(dsos_index_t *index, sos_key_t key);
+sos_obj_t	dsos_index_find_min(dsos_index_t *index, sos_key_t *key);
+sos_obj_t	dsos_index_find_max(dsos_index_t *index, sos_key_t *key);
+int		dsos_index_find_min_ref(dsos_index_t *index, sos_key_t *key, sos_obj_ref_t *ref);
+int		dsos_index_find_max_ref(dsos_index_t *index, sos_key_t *key, sos_obj_ref_t *ref);
+sos_type_t	dsos_index_key_type(dsos_index_t *index);
+const char	*dsos_index_name(dsos_index_t *index);
+void		dsos_index_print(dsos_index_t *index, FILE *f);
+int		dsos_index_stat(dsos_index_t *index, sos_index_stat_t stats);
 int		dsos_init(const char *config_filename);
-sos_obj_t	dsos_iter_begin(dsos_iter_t *iter);
-int		dsos_iter_close(dsos_iter_t *iter);
-sos_obj_t	dsos_iter_find(dsos_iter_t *iter, sos_key_t key);
-dsos_iter_t	*dsos_iter_new(dsos_schema_t *schema, sos_attr_t attr);
-sos_obj_t	dsos_iter_next(dsos_iter_t *iter);
-sos_obj_t	dsos_obj_alloc(dsos_schema_t *schema);
+int		dsos_iter_begin(dsos_iter_t *iter);
+int		dsos_iter_end(dsos_iter_t *iter);
+int		dsos_iter_find(dsos_iter_t *iter, sos_key_t key);
+int		dsos_iter_find_sup(dsos_iter_t *iter, sos_key_t key);
+int		dsos_iter_find_inf(dsos_iter_t *iter, sos_key_t key);
+void		dsos_iter_free(dsos_iter_t *iter);
+sos_key_t	dsos_iter_key(dsos_iter_t *iter);
+sos_iter_flags_t dsos_iter_flags_get(dsos_iter_t *iter);
+void		dsos_iter_flags_set(dsos_iter_t *iter, sos_iter_flags_t flags);
+int		dsos_iter_next(dsos_iter_t *iter);
+sos_obj_t	dsos_iter_obj(dsos_iter_t *iter);
+int		dsos_iter_pos_get(dsos_iter_t *iter, sos_pos_t *pos);
+int		dsos_iter_pos_put(dsos_iter_t *iter, sos_pos_t pos);
+int		dsos_iter_pos_set(dsos_iter_t *iter, sos_pos_t pos);
+int		dsos_iter_prev(dsos_iter_t *iter);
+sos_obj_t	dsos_obj_alloc(sos_schema_t schema);
 int		dsos_obj_create(sos_obj_t obj, dsos_obj_cb_t cb, void *ctxt);
-sos_obj_t	dsos_obj_get(dsos_schema_t *schema, sos_obj_ref_t obj_id);
+sos_obj_t	dsos_obj_get(sos_schema_t schema, sos_obj_ref_t obj_id);
 int		dsos_obj_delete(sos_obj_t obj);
+int		dsos_obj_index(sos_obj_t obj);
+int		dsos_obj_remove(sos_obj_t obj);
 int		dsos_part_create(dsos_t *cont, const char *part_name, const char *part_path);
+int		dsos_part_id(dsos_part_t *part);
+char		*dsos_part_name(dsos_part_t *part);
+char		*dsos_part_path(dsos_part_t *part);
+int		dsos_part_delete(dsos_part_t *part);
+int		dsos_part_move(dsos_part_t *part, const char *new_path);
+int		dsos_part_export(dsos_part_t *part, dsos_t *dst_cont, int reindex);
+int		dsos_part_index(dsos_part_t *part);
+void		dsos_part_put(dsos_part_t *part);
 dsos_part_t	*dsos_part_find(dsos_t *cont, const char *name);
+dsos_part_iter_t *dsos_part_iter_new(dsos_t *cont);
+dsos_part_t	*dsos_part_first(dsos_part_iter_t *part_iter);
+dsos_part_t	*dsos_part_next(dsos_part_iter_t *part_iter);
+void		dsos_part_iter_free(dsos_part_iter_t *part_iter);
 int		dsos_part_state_set(dsos_part_t *part, sos_part_state_t new_state);
 void		dsos_perror(const char *fmt, ...);
-int		dsos_ping_one(int server_num, struct dsos_ping_stats *stats, int debug);
-int		dsos_ping_all(struct dsos_ping_stats **statsp, int debug);
-int		dsos_schema_add(dsos_t *cont, dsos_schema_t *schema);
-dsos_schema_t	*dsos_schema_from_template(sos_schema_template_t t);
-dsos_schema_t	*dsos_schema_by_name(dsos_t *dsos, const char *name);
+char		*dsos_pos_to_str(sos_pos_t pos);
+int		dsos_pos_from_str(sos_pos_t *pos, const char *str);
+int		dsos_schema_add(dsos_t *cont, sos_schema_t schema);
+sos_schema_t	dsos_schema_by_name(dsos_t *cont, const char *name);
+sos_schema_t	dsos_schema_by_id(dsos_t *cont, int id);
+sos_schema_t	dsos_schema_first(dsos_t *cont);
+sos_schema_t	dsos_schema_next(sos_schema_t schema);
 
 #endif

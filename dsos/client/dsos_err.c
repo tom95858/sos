@@ -105,7 +105,7 @@ void dsos_perror(const char *fmt, ...)
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 
-	fprintf(stderr, "server  ");
+	fprintf(stderr, "\nserver  ");
 	for (i = 0; i < g.num_servers; ++i)
 		fprintf(stderr, "%3d ", i);
 	fprintf(stderr, "\n");

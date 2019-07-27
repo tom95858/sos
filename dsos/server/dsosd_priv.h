@@ -69,11 +69,13 @@ typedef struct dsosd_rpc_s {
 } dsosd_rpc_t;
 
 /* Red-black tree node to map a string to a pointer. */
-enum {
+typedef enum {
 	DSOSD_HANDLE_CONT,
 	DSOSD_HANDLE_PART,
 	DSOSD_HANDLE_SCHEMA,
 	DSOSD_HANDLE_ITER,
+	DSOSD_HANDLE_FILTER,
+	DSOSD_HANDLE_INDEX,
 } dsosd_handle_type_t;
 struct ptr_rbn {
 	struct rbn	rbn;
@@ -110,7 +112,6 @@ typedef struct dsosd_client_s {
 void		dsosd_client_get(dsosd_client_t *client);
 dsosd_client_t	*dsosd_client_new(zap_ep_t ep);
 void		dsosd_client_put(dsosd_client_t *client);
-dsos_obj_id_t	dsosd_obj_id(sos_obj_t sos_obj);
 
 zap_err_t	dsosd_rpc_complete(dsosd_rpc_t *rpc, int status);
 void		dsosd_rpc_complete_with_obj(dsosd_rpc_t *rpc, sos_obj_t obj, uint64_t obj_remote_va);
@@ -118,9 +119,21 @@ void		dsosd_rpc_get(dsosd_rpc_t *rpc);
 dsosd_rpc_t	*dsosd_rpc_new(dsosd_client_t *client, dsos_msg_t *msg, size_t len);
 void		dsosd_rpc_put(dsosd_rpc_t *rpc);
 
+dsos_handle_t	dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type_t type);
+void		*dsosd_handle_to_ptr(dsosd_rpc_t *rpc, dsos_handle_t handle, dsosd_handle_type_t type);
+void		dsosd_handle_free(dsosd_rpc_t *rpc, dsos_handle_t handle);
+const char	*dsosd_handle_type_str(dsosd_handle_type_t type);
+
 void		rpc_handle_cont_open(dsosd_rpc_t *rpc);
 void		rpc_handle_cont_close(dsosd_rpc_t *rpc);
 void		rpc_handle_cont_new(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_close(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_cond_add(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_flags_set(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_flags_get(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_free(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_miss_count(dsosd_rpc_t *rpc);
+void		rpc_handle_filter_new(dsosd_rpc_t *rpc);
 void		rpc_handle_iter_new(dsosd_rpc_t *rpc);
 void		rpc_handle_iter_step(dsosd_rpc_t *rpc);
 void		rpc_handle_obj_create(dsosd_rpc_t *rpc);
@@ -132,8 +145,12 @@ void		rpc_handle_part_set_state(dsosd_rpc_t *rpc);
 void		rpc_handle_ping(dsosd_rpc_t *rpc);
 void		rpc_handle_schema_add(dsosd_rpc_t *rpc);
 void		rpc_handle_schema_by_name(dsosd_rpc_t *rpc);
+void		rpc_handle_schema_by_id(dsosd_rpc_t *rpc);
+void		rpc_handle_schema_first(dsosd_rpc_t *rpc);
+void		rpc_handle_schema_next(dsosd_rpc_t *rpc);
 void		rpc_handle_schema_from_template(dsosd_rpc_t *rpc);
 
+sos_attr_t	dsosd_rpc_unpack_attr(dsosd_rpc_t *rpc);
 int		dsosd_rpc_pack_fits(dsosd_rpc_t *rpc, int len);
 int		dsosd_rpc_pack_handle(dsosd_rpc_t *rpc, dsos_handle_t handle);
 int		dsosd_rpc_pack_obj_needs(sos_obj_t obj);
@@ -142,6 +159,7 @@ int		dsosd_rpc_pack_obj_id(dsosd_rpc_t *rpc, sos_obj_ref_t obj_id);
 int		dsosd_rpc_pack_schema(dsosd_rpc_t *rpc, sos_schema_t schema);
 int		dsosd_rpc_pack_u32(dsosd_rpc_t *rpc, uint32_t val);
 dsos_handle_t	dsosd_rpc_unpack_handle(dsosd_rpc_t *rpc);
+void		*dsosd_rpc_unpack_handle_to_ptr(dsosd_rpc_t *rpc, dsosd_handle_type_t want_type);
 sos_key_t	dsosd_rpc_unpack_key(dsosd_rpc_t *rpc);
 uint32_t	dsosd_rpc_unpack_u32(dsosd_rpc_t *rpc);
 int		dsosd_rpc_unpack_obj(dsosd_rpc_t *rpc, sos_obj_t obj);
@@ -149,6 +167,7 @@ uint64_t	dsosd_rpc_unpack_obj_ptr(dsosd_rpc_t *rpc, uint64_t *plen);
 sos_obj_ref_t	dsosd_rpc_unpack_obj_id(dsosd_rpc_t *rpc);
 sos_schema_t	dsosd_rpc_unpack_schema(dsosd_rpc_t *rpc);
 char		*dsosd_rpc_unpack_str(dsosd_rpc_t *rpc);
+sos_value_t	dsosd_rpc_unpack_value(dsosd_rpc_t *rpc);
 
 #define dsosd_debug(fmt, ...)		sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #ifdef RPC_DEBUG

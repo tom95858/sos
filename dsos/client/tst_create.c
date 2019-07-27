@@ -31,7 +31,7 @@ sem_t		sem;
 sem_t		sem2;
 sos_obj_ref_t	*refs;
 dsos_t		*cont;
-dsos_schema_t	*schema;
+sos_schema_t	schema;
 sos_attr_t	attr_seq, attr_hash, attr_data, attr_int1, attr_int2;
 
 uint64_t	hash(void *buf, int len);
@@ -189,7 +189,7 @@ int main(int ac, char *av[])
 	if (find)
 		do_obj_iter_finds();
 
-	dsos_container_close(cont);
+	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	dsos_disconnect();
 	sleep(1);
 }
@@ -240,27 +240,27 @@ void do_init()
 		dsos_perror("could not open schema 'test'\n");
 		exit(1);
 	}
-	attr_seq = sos_schema_attr_by_name(schema->sos_schema, "seq");
+	attr_seq = sos_schema_attr_by_name(schema, "seq");
 	if (!attr_seq) {
 		dsos_perror("could not get attr seq from schema\n");
 		exit(1);
 	}
-	attr_hash = sos_schema_attr_by_name(schema->sos_schema, "hash");
+	attr_hash = sos_schema_attr_by_name(schema, "hash");
 	if (!attr_hash) {
 		dsos_perror("could not get attr hash from schema\n");
 		exit(1);
 	}
-	attr_data = sos_schema_attr_by_name(schema->sos_schema, "data");
+	attr_data = sos_schema_attr_by_name(schema, "data");
 	if (!attr_data) {
 		dsos_perror("could not get attr data from schema\n");
 		exit(1);
 	}
-	attr_int1 = sos_schema_attr_by_name(schema->sos_schema, "int1");
+	attr_int1 = sos_schema_attr_by_name(schema, "int1");
 	if (!attr_int1) {
 		dsos_perror("could not get attr int1 from schema\n");
 		exit(1);
 	}
-	attr_int2 = sos_schema_attr_by_name(schema->sos_schema, "int2");
+	attr_int2 = sos_schema_attr_by_name(schema, "int2");
 	if (!attr_int2) {
 		dsos_perror("could not get attr int2 from schema\n");
 		exit(1);
@@ -284,7 +284,6 @@ dsos_t *create_cont(char *path, int perms)
 	int		i, ret, sz;
 	dsos_t		*cont;
 	dsos_part_t	*part;
-	dsos_schema_t	*schema;
 
 	if (verbose)
 		printf("creating container\n");
@@ -319,7 +318,7 @@ dsos_t *create_cont(char *path, int perms)
 		exit(1);
 	}
 
-	schema = dsos_schema_from_template(&schema_template);
+	schema = sos_schema_from_template(&schema_template);
 	if (!schema) {
 		dsos_perror("coult not create schema 'test'\n");
 		exit(1);
@@ -398,33 +397,37 @@ void do_obj_creates()
 	}
 
 	print_elapsed(50000, num_iters, beg, last);
+	free(mydata);
 }
 
 void do_obj_iter()
 {
 	uint64_t	num;
 	char		*mydata;
-	sos_obj_t	sos_obj;
+	sos_obj_t	obj;
 	dsos_iter_t	*iter;
 
-	iter = dsos_iter_new(schema, attr_seq);
+	iter = dsos_attr_iter_new(attr_seq);
 	if (!iter) {
 		printf("could not create iter\n");
 		exit(1);
 	}
 	mydata = malloc(4000);
 	num = start_num;
-	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
+	dsos_iter_begin(iter);
+	while (obj = dsos_iter_obj(iter)) {
 		char buf1[16], buf2[32];
-		sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
-		sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
-		sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+		sos_obj_attr_to_str(obj, attr_data, mydata, 4000);
+		sos_obj_attr_to_str(obj, attr_seq, buf1, 16);
+		sos_obj_attr_to_str(obj, attr_hash, buf2, 32);
 		printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
-		sos_obj_put(sos_obj);
+		sos_obj_put(obj);
 		++num;
 		if (--num_iters <= 0) break;
+		dsos_iter_next(iter);
 	}
-	dsos_iter_close(iter);
+	dsos_iter_free(iter);
+	free(mydata);
 }
 
 void do_obj_iter_finds()
@@ -434,10 +437,10 @@ void do_obj_iter_finds()
 	char		*mydata;
 	dsos_iter_t	*iter;
 	sos_key_t	key;
-	sos_obj_t	sos_obj;
+	sos_obj_t	obj;
 	struct timespec	beg, last;
 
-	iter = dsos_iter_new(schema, attr_seq);
+	iter = dsos_attr_iter_new(attr_seq);
 	if (!iter) {
 		printf("could not create iter\n");
 		exit(1);
@@ -448,18 +451,19 @@ void do_obj_iter_finds()
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
 		key = sos_key_for_attr(NULL, attr_seq, num);
-		sos_obj = dsos_iter_find(iter, key);
-		if (sos_obj) {
+		dsos_iter_find(iter, key);
+		obj = dsos_iter_obj(iter);
+		if (obj) {
 			char buf1[16], buf2[32];
-			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
-			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
-			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+			sos_obj_attr_to_str(obj, attr_data, mydata, 4000);
+			sos_obj_attr_to_str(obj, attr_seq, buf1, 16);
+			sos_obj_attr_to_str(obj, attr_hash, buf2, 32);
 			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
 		} else {
 			printf("obj %d NOT FOUND\n", num);
 			break;
 		}
-		sos_obj_put(sos_obj);
+		sos_obj_put(obj);
 		++num;
 		if (progress && i && ((i % 50000) == 0)) {
 			print_elapsed(50000, i, beg, last);
@@ -467,7 +471,8 @@ void do_obj_iter_finds()
 		}
 	}
 	print_elapsed(50000, num_iters, beg, last);
-	dsos_iter_close(iter);
+	dsos_iter_free(iter);
+	free(mydata);
 }
 
 void do_obj_deletes()
@@ -477,11 +482,11 @@ void do_obj_deletes()
 	char		*mydata;
 	dsos_iter_t	*iter;
 	sos_key_t	key;
-	sos_obj_t	sos_obj;
+	sos_obj_t	obj;
 	struct timespec	beg, last;
 	char		buf1[16], buf2[32];
 
-	iter = dsos_iter_new(schema, attr_seq);
+	iter = dsos_attr_iter_new(attr_seq);
 	if (!iter) {
 		printf("could not create iter\n");
 		exit(1);
@@ -491,18 +496,20 @@ void do_obj_deletes()
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 0; i < num_iters; ++i) {
-		sos_obj = dsos_iter_begin(iter);
-		if (!sos_obj) {
+		dsos_iter_begin(iter);
+		obj = dsos_iter_obj(iter);
+		if (!obj) {
 			printf("obj %d NOT FOUND\n", num);
 			break;
 		}
-		if (sos_obj && verbose) {
-			sos_obj_attr_to_str(sos_obj, attr_data, mydata, 4000);
-			sos_obj_attr_to_str(sos_obj, attr_seq, buf1, 16);
-			sos_obj_attr_to_str(sos_obj, attr_hash, buf2, 32);
+		if (obj && verbose) {
+			sos_obj_attr_to_str(obj, attr_data, mydata, 4000);
+			sos_obj_attr_to_str(obj, attr_seq, buf1, 16);
+			sos_obj_attr_to_str(obj, attr_hash, buf2, 32);
 			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
 		}
-		dsos_obj_delete(sos_obj);
+		dsos_obj_delete(obj);
+		sos_obj_put(obj);
 
 		++num;
 		if (progress && i && ((i % 50000) == 0)) {
@@ -511,7 +518,8 @@ void do_obj_deletes()
 		}
 	}
 	print_elapsed(50000, num_iters, beg, last);
-	dsos_iter_close(iter);
+	dsos_iter_free(iter);
+	free(mydata);
 }
 
 uint64_t hash(void *buf, int len)
@@ -629,6 +637,7 @@ void do_local()
 		}
 	}
 	print_elapsed(50000, num_iters, beg, last);
+	free(mydata);
 }
 
 void print_elapsed(int num_iters_interval, int num_iters_tot,

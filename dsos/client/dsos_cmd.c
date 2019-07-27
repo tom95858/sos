@@ -139,7 +139,7 @@ usage:
 			dsos_perror("error setting partition state\n");
 			return ret;
 		}
-		dsos_container_close(cont);
+		dsos_container_close(cont, SOS_COMMIT_SYNC);
 	}
 
 	return 0;
@@ -153,7 +153,7 @@ int do_schema(int ac, char *av[])
 	int			c, i, add = 0, dump = 0, ret;
 	char			*cont_nm = NULL, *schema_nm = NULL, *template = NULL;
 	dsos_t			*cont;
-	dsos_schema_t		*schema;
+	sos_schema_t		schema;
 	enum { NONE,ADD,DUMP }	op = NONE;
 	sos_schema_template_t	sos_templ;
 
@@ -207,7 +207,7 @@ usage:
 		sos_templ = parse_schema_template(schema_nm, template);
 		if (!sos_templ)
 			return 1;
-		schema = dsos_schema_from_template(sos_templ);
+		schema = sos_schema_from_template(sos_templ);
 		if (!schema) {
                        dsos_perror("could not create schema '%s'\n", schema_nm);
 			return 1;
@@ -225,15 +225,19 @@ usage:
                        dsos_perror("could not open schema '%s'\n", schema_nm);
 			return 1;
 		}
-		dump_schema(schema->sos_schema);
+		dump_schema(schema);
 		break;
 	}
-	dsos_container_close(cont);
+	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	return 0;
 }
 
+static int import_verbose;
+
 static void obj_cb(sos_obj_t obj, void *ctxt)
 {
+	if (import_verbose)
+		printf("obj_id %lx%lx\n", obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
 	sem_post((sem_t *)ctxt);
 }
 
@@ -246,15 +250,15 @@ int do_import(int ac, char *av[])
 	FILE		*fp;
 	char		*cont_nm = NULL, *schema_nm = NULL, *buf, *tok;
 	dsos_t		*cont;
-	dsos_schema_t	*schema;
+	sos_schema_t	schema;
 	sos_obj_t	obj;
 	sos_attr_t	attr;
-	sos_schema_t	sos_schema;
 	sem_t		sem;
 
 	struct option	lopts[] = {
 		{ "cont",	required_argument, NULL, 'c' },
 		{ "schema",	required_argument, NULL, 's' },
+		{ "verbose",	no_argument,       NULL, 'v' },
 		{ 0,		0,		   0,     0  }
 	};
 
@@ -262,11 +266,13 @@ int do_import(int ac, char *av[])
 		switch (c) {
 		    case 'c': cont_nm   = strdup(optarg); break;
 		    case 's': schema_nm = strdup(optarg); break;
+		    case 'v': import_verbose = 1; break;
 		    default:
 			usage();
 			fprintf(stderr, "options:\n");
 			fprintf(stderr, "  --cont <path>      Container path\n");
 			fprintf(stderr, "  --schema <name>    Schema name\n");
+			fprintf(stderr, "  --verbose\n");
 			return 1;
 		}
 	}
@@ -294,7 +300,6 @@ int do_import(int ac, char *av[])
 		dsos_perror("could not open schema '%s'\n", schema_nm);
 		return 1;
 	}
-	sos_schema = schema->sos_schema;
 
 	bufsz = 1024*1024;
 	buf   = malloc(bufsz);
@@ -313,7 +318,7 @@ int do_import(int ac, char *av[])
 			exit(1);
 		}
 		for (i = 0, tok = strtok(buf, ","); tok; tok = strtok(NULL, ","), ++i) {
-			attr = sos_schema_attr_by_id(sos_schema, i);
+			attr = sos_schema_attr_by_id(schema, i);
 			if (!attr) {
 				fprintf(stderr, "could not get attribute #%d\n", i);
 				return 1;
@@ -339,7 +344,7 @@ int do_import(int ac, char *av[])
 	for (i = 0; i < num_objs; ++i)
 		sem_wait(&sem);
 
-	dsos_container_close(cont);
+	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	return 0;
 }
 
@@ -350,10 +355,10 @@ int do_iter(int ac, char *av[])
 {
 	int		c, i, first, len;
 	char		*attr_nm = NULL, *cont_nm = NULL, *schema_nm = NULL;
-	sos_obj_t	sos_obj;
+	sos_obj_t	obj;
 	sos_attr_t	attr;
 	dsos_t		*cont;
-	dsos_schema_t	*schema;
+	sos_schema_t	schema;
 	dsos_iter_t	*iter;
 
 	struct option	lopts[] = {
@@ -393,26 +398,28 @@ int do_iter(int ac, char *av[])
 		return 1;
 	}
 	if (attr_nm[0] == '#')
-		attr = sos_schema_attr_by_id(schema->sos_schema, atoi(attr_nm+1));
+		attr = sos_schema_attr_by_id(schema, atoi(attr_nm+1));
 	else
-		attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
+		attr = sos_schema_attr_by_name(schema, attr_nm);
 	if (!attr) {
 		dsos_perror("could not find attribute '%s'\n", attr_nm);
 		return 1;
 	}
-	iter = dsos_iter_new(schema, attr);
+	iter = dsos_attr_iter_new(attr);
 	if (!iter) {
 		dsos_perror("could not create iter\n");
 		return 1;
 	}
 
-	for (sos_obj = dsos_iter_begin(iter); sos_obj; sos_obj = dsos_iter_next(iter)) {
-		dump_obj(sos_obj);
-		sos_obj_put(sos_obj);
+	dsos_iter_begin(iter);
+	while (obj = dsos_iter_obj(iter)) {
+		dump_obj(obj);
+		sos_obj_put(obj);
+		dsos_iter_next(iter);
 	}
 
-	dsos_iter_close(iter);
-	dsos_container_close(cont);
+	dsos_iter_free(iter);
+	dsos_container_close(cont, SOS_COMMIT_SYNC);
 
 	return 0;
 }
@@ -424,10 +431,10 @@ int do_delete(int ac, char *av[])
 {
 	int		c, i, first, len, num = -1;
 	char		*attr_nm = NULL, *cont_nm = NULL, *schema_nm = NULL;
-	sos_obj_t	sos_obj;
+	sos_obj_t	obj;
 	sos_attr_t	attr;
 	dsos_t		*cont;
-	dsos_schema_t	*schema;
+	sos_schema_t	schema;
 	dsos_iter_t	*iter;
 
 	struct option	lopts[] = {
@@ -470,24 +477,27 @@ int do_delete(int ac, char *av[])
 		return 1;
 	}
 	if (attr_nm[0] == '#')
-		attr = sos_schema_attr_by_id(schema->sos_schema, atoi(attr_nm+1));
+		attr = sos_schema_attr_by_id(schema, atoi(attr_nm+1));
 	else
-		attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
+		attr = sos_schema_attr_by_name(schema, attr_nm);
 	if (!attr) {
 		dsos_perror("could not find attribute '%s'\n", attr_nm);
 		return 1;
 	}
-	iter = dsos_iter_new(schema, attr);
+	iter = dsos_attr_iter_new(attr);
 	if (!iter) {
 		dsos_perror("could not create iter\n");
 		return 1;
 	}
 
-	for (i = 0; (i < num) && (sos_obj = dsos_iter_begin(iter)); ++i)
-		dsos_obj_delete(sos_obj);
+	for (i = 0; (i < num) && !dsos_iter_begin(iter); ++i) {
+		obj = dsos_iter_obj(iter);
+		dsos_obj_delete(obj);
+		sos_obj_put(obj);
+	}
 
-	dsos_iter_close(iter);
-	dsos_container_close(cont);
+	dsos_iter_free(iter);
+	dsos_container_close(cont, SOS_COMMIT_SYNC);
 
 	return 0;
 }
@@ -501,12 +511,12 @@ int do_find(int ac, char *av[])
 	char		attr_nm[64], val_str[64];
 	char		*cont_nm = NULL, *schema_nm = NULL;
 	dsos_t		*cont;
-	dsos_schema_t	*schema;
+	sos_schema_t	schema;
 	dsos_iter_t	*iter;
 	sos_attr_t	attr;
 	sos_value_t	val;
 	sos_key_t	key;
-	sos_obj_t	sos_obj;
+	sos_obj_t	obj;
 
 	struct option	lopts[] = {
 		{ "cont",	required_argument, NULL, 'c' },
@@ -549,7 +559,7 @@ int do_find(int ac, char *av[])
 		fprintf(stderr, "syntax error: must specify attr=value\n");
 		return 1;
 	}
-	attr = sos_schema_attr_by_name(schema->sos_schema, attr_nm);
+	attr = sos_schema_attr_by_name(schema, attr_nm);
 	if (!attr) {
 		dsos_perror("could not find attribute '%s'\n", attr_nm);
 		return 1;
@@ -568,28 +578,27 @@ int do_find(int ac, char *av[])
 	}
 	sos_key_set(key, sos_value_as_key(val), sos_attr_key_size(attr));
 
-	iter = dsos_iter_new(schema, attr);
+	iter = dsos_attr_iter_new(attr);
 	if (!iter) {
 		dsos_perror("could not create iter\n");
 		return 1;
 	}
 
-	sos_obj = dsos_iter_find(iter, key);
-
-	if (sos_obj) {
-		dump_obj(sos_obj);
-		sos_obj_put(sos_obj);
-		ret = 0;
-	} else {
+	if (dsos_iter_find(iter, key)) {
 		printf("not found\n");
 		ret = 1;
+	} else {
+		obj = dsos_iter_obj(iter);
+		dump_obj(obj);
+		sos_obj_put(obj);
+		ret = 0;
 	}
 
 	sos_key_put(key);
 	sos_value_put(val);
 	sos_value_free(val);
-	dsos_iter_close(iter);
-	dsos_container_close(cont);
+	dsos_iter_free(iter);
+	dsos_container_close(cont, SOS_COMMIT_SYNC);
 
 	return ret;
 }

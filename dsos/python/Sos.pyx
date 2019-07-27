@@ -50,6 +50,7 @@ from libc.stdlib cimport calloc, malloc, free, realloc
 import datetime as dt
 import numpy as np
 import struct
+import os
 import sys
 import copy
 from DataSet import DataSet
@@ -183,11 +184,14 @@ cdef class SosObject:
             raise Exception(libc_errno_str[self.error])
         else:
             raise Exception("Error {0}".format[self.error])
+    def dsos_abort(self, errstr):
+        dsos_perror(errstr)
+        raise Exception("DSOS error")
 
 cdef class SchemaIter(SosObject):
     cdef sos_schema_t c_next_schema
     def __init__(self, Container cont):
-        self.c_next_schema = sos_schema_first(cont.c_cont)
+        self.c_next_schema = dsos_schema_first(cont.c_cont)
 
     def __iter__(self):
         return self
@@ -197,20 +201,20 @@ cdef class SchemaIter(SosObject):
             raise StopIteration
         s = Schema()
         s.assign(self.c_next_schema)
-        self.c_next_schema = sos_schema_next(self.c_next_schema)
+        self.c_next_schema = dsos_schema_next(self.c_next_schema)
         return s
 
 cdef class PartIter(SosObject):
-    cdef sos_part_iter_t c_iter
-    cdef sos_part_t c_part
+    cdef dsos_part_iter_t *c_iter
+    cdef dsos_part_t *c_part
     def __init__(self, Container cont):
-        self.c_iter = sos_part_iter_new(cont.c_cont)
+        self.c_iter = dsos_part_iter_new(cont.c_cont)
         if self.c_iter == NULL:
             raise MemoryError("Could not allocate a new partition iterator.")
         self.c_part = NULL
 
     def __iter__(self):
-        self.c_part = sos_part_first(self.c_iter)
+        self.c_part = dsos_part_first(self.c_iter)
         return self
 
     def __next__(self):
@@ -218,7 +222,7 @@ cdef class PartIter(SosObject):
             raise StopIteration
         p = Partition()
         p.assign(self.c_part)
-        self.c_part = sos_part_next(self.c_iter)
+        self.c_part = dsos_part_next(self.c_iter)
         return p
 
     def __del__(self):
@@ -226,20 +230,20 @@ cdef class PartIter(SosObject):
 
     def __dealloc__(self):
         if self.c_iter != NULL:
-            sos_part_iter_free(self.c_iter)
+            dsos_part_iter_free(self.c_iter)
             self.c_iter = NULL
 
 cdef class IndexIter(SosObject):
-    cdef sos_container_index_iter_t c_iter
-    cdef sos_index_t c_idx
+    cdef dsos_container_index_iter_t *c_iter
+    cdef dsos_index_t *c_idx
     def __init__(self, Container cont):
-        self.c_iter = sos_container_index_iter_new(cont.c_cont)
+        self.c_iter = dsos_container_index_iter_new(cont.c_cont)
         if self.c_iter == NULL:
             raise MemoryError("Could not allocate a new container iterator.")
         self.c_idx = NULL
 
     def __iter__(self):
-        self.c_idx = sos_container_index_iter_first(self.c_iter)
+        self.c_idx = dsos_container_index_iter_first(self.c_iter)
         return self
 
     def __next__(self):
@@ -247,7 +251,7 @@ cdef class IndexIter(SosObject):
             raise StopIteration
         idx = Index()
         idx.assign(self.c_idx)
-        self.c_idx = sos_container_index_iter_next(self.c_iter)
+        self.c_idx = dsos_container_index_iter_next(self.c_iter)
         return idx
 
     def __del__(self):
@@ -255,11 +259,11 @@ cdef class IndexIter(SosObject):
 
     def __dealloc__(self):
         if self.c_iter != NULL:
-            sos_container_index_iter_free(self.c_iter)
+            dsos_container_index_iter_free(self.c_iter)
             self.c_iter = NULL
 
 cdef class Container(SosObject):
-    cdef sos_t c_cont
+    cdef dsos_t *c_cont
 
     def __init__(self, path=None, o_perm=SOS_PERM_RW):
         SosObject.__init__(self)
@@ -269,49 +273,49 @@ cdef class Container(SosObject):
 
     def version(self):
         if self.c_cont != NULL:
-            return sos_container_version(self.c_cont)
+            return dsos_container_version(self.c_cont)
         return None
 
     def open(self, path, o_perm=SOS_PERM_RW):
         if self.c_cont != NULL:
             self.abort(EBUSY)
-        self.c_cont = sos_container_open(path.encode(), o_perm)
+        self.c_cont = dsos_container_open(path.encode(), o_perm)
         if self.c_cont == NULL:
-            raise self.abort(errno)
+            raise self.dsos_abort("error opening container")
 
     def create(self, path, o_mode=0660):
         cdef int rc
         if self.c_cont != NULL:
             self.abort(EBUSY)
-        rc = sos_container_new(path.encode(), o_mode)
+        rc = dsos_container_new(path.encode(), o_mode)
         if rc != 0:
-            self.abort(rc)
+            self.dsos_abort("error creating container")
 
     def close(self, commit=SOS_COMMIT_ASYNC):
         if self.c_cont == NULL:
             self.abort(EINVAL)
-        sos_container_close(self.c_cont, commit)
+        dsos_container_close(self.c_cont, commit)
         self.c_cont = NULL
 
     def commit(self, commit=SOS_COMMIT_ASYNC):
         cdef int rc
-        rc = sos_container_commit(self.c_cont, commit)
+        rc = dsos_container_commit(self.c_cont, commit)
         if rc != 0:
-            self.abort(rc)
+            self.dsos_abort("error comitting container")
 
     def part_create(self, name, path=None):
         cdef int rc
         if self.c_cont == NULL:
             raise ValueError("The container is not open.")
         if path:
-            rc = sos_part_create(self.c_cont, name.encode(), path.encode())
+            rc = dsos_part_create(self.c_cont, name.encode(), path.encode())
         else:
-            rc = sos_part_create(self.c_cont, name.encode(), NULL)
+            rc = dsos_part_create(self.c_cont, name.encode(), NULL)
         if rc != 0:
-            self.abort(rc)
+            self.dsos_abort("error creating partition")
 
     def part_by_name(self, name):
-        cdef sos_part_t c_part = sos_part_find(self.c_cont, name.encode())
+        cdef dsos_part_t *c_part = dsos_part_find(self.c_cont, name.encode())
         if c_part != NULL:
             p = Partition()
             p.assign(c_part)
@@ -325,7 +329,7 @@ cdef class Container(SosObject):
         return IndexIter(self)
 
     def schema_by_name(self, name):
-        cdef sos_schema_t c_schema = sos_schema_by_name(self.c_cont, name.encode())
+        cdef sos_schema_t c_schema = dsos_schema_by_name(self.c_cont, name.encode())
         if c_schema != NULL:
             s = Schema()
             s.assign(c_schema)
@@ -333,7 +337,7 @@ cdef class Container(SosObject):
         return None
 
     def schema_by_id(self, id_):
-        cdef sos_schema_t c_schema = sos_schema_by_id(self.c_cont, id_)
+        cdef sos_schema_t c_schema = dsos_schema_by_id(self.c_cont, id_)
         if c_schema != NULL:
             s = Schema()
             s.assign(c_schema)
@@ -373,7 +377,7 @@ cdef class PartState(object):
 cdef class PartStat(object):
     cdef sos_part_stat_s c_stat
     def __init__(self, Partition part):
-        cdef int rc = sos_part_stat(part.c_part, &self.c_stat)
+        cdef int rc = dsos_part_stat(part.c_part, &self.c_stat)
 
     @property
     def accessed(self):
@@ -395,31 +399,31 @@ cdef class PartStat(object):
         return str(self.c_stat)
 
 cdef class Partition(SosObject):
-    cdef sos_part_t c_part
+    cdef dsos_part_t *c_part
     # cdef sos_part_stat_s c_stat
 
     def __init__(self):
         self.c_part = NULL
 
-    cdef assign(self, sos_part_t c_part):
+    cdef assign(self, dsos_part_t *c_part):
         self.c_part = c_part
         return self
 
     def part_id(self):
         """Returns the Partition id"""
-        return sos_part_id(self.c_part)
+        return dsos_part_id(self.c_part)
 
     def name(self):
         """Returns the partition name"""
-        return sos_part_name(self.c_part)
+        return dsos_part_name(self.c_part)
 
     def path(self):
         """Returns the partition path"""
-        return sos_part_path(self.c_part)
+        return dsos_part_path(self.c_part)
 
     def state(self):
         """Returns the partition state"""
-        return PartState(sos_part_state(self.c_part))
+        return PartState(dsos_part_state(self.c_part))
 
     def stat(self):
         """Returns the partition PartStat (size, access time, etc...) information"""
@@ -427,16 +431,16 @@ cdef class Partition(SosObject):
 
     def delete(self):
         """Delete the paritition"""
-        cdef int rc = sos_part_delete(self.c_part)
+        cdef int rc = dsos_part_delete(self.c_part)
         if rc != 0:
-            self.abort(rc)
+            self.dsos_abort("error deleting partition")
         self.c_part = NULL
 
     def move(self, new_path):
         """Move the paritition to a different location"""
-        cdef int rc = sos_part_move(self.c_part, new_path.encode())
+        cdef int rc = dsos_part_move(self.c_part, new_path.encode())
         if rc != 0:
-            self.abort(rc)
+            self.dsos_abort("error moving partition")
 
     def state_set(self, new_state):
         """Set the partition state"""
@@ -450,24 +454,24 @@ cdef class Partition(SosObject):
             state = SOS_PART_STATE_OFFLINE
         else:
             raise ValueError("Invalid partition state name {0}".format(new_state))
-        rc = sos_part_state_set(self.c_part, state)
+        rc = dsos_part_state_set(self.c_part, state)
         if rc != 0:
-            self.abort(rc)
+            self.dsosabort("error setting partition state")
 
     def export(self, Container dst_cont, reindex=False):
         """Export the contents of this partition to another container"""
-        return sos_part_export(self.c_part, dst_cont.c_cont, reindex)
+        return dsos_part_export(self.c_part, dst_cont.c_cont, reindex)
 
     def index(self):
         """Index the contents of this partition"""
-        return sos_part_index(self.c_part)
+        return dsos_part_index(self.c_part)
 
     def __del__(self):
         self.__dealloc__()
 
     def __dealloc__(self):
         if self.c_part:
-            sos_part_put(self.c_part)
+            dsos_part_put(self.c_part)
             self.c_part = NULL
 
 sos_type_strs = {
@@ -703,9 +707,9 @@ cdef class Schema(SosObject):
         -- The container handle
         """
         cdef int rc
-        rc = sos_schema_add(cont.c_cont, self.c_schema)
+        rc = dsos_schema_add(cont.c_cont, self.c_schema)
         if rc != 0:
-            self.abort(rc)
+            self.dsos_abort("error adding schema")
 
     def attr_by_name(self, name):
         """Returns the attribute from the schema
@@ -737,11 +741,11 @@ cdef class Schema(SosObject):
 
     def alloc(self):
         """Allocate a new object of this type in the container"""
-        cdef sos_obj_t c_obj = sos_obj_new(self.c_schema)
+        cdef sos_obj_t c_obj = dsos_obj_alloc(self.c_schema)
         if c_obj == NULL:
-            self.abort()
+            self.abort(ENOMEM)
         o = Object()
-        return o.assign(c_obj)
+        return o.assign(c_obj, needs_dsos_create = True)
 
     def __getitem__(self, attr_id):
         if type(attr_id) == int:
@@ -753,7 +757,7 @@ cdef class Schema(SosObject):
     def __str__(self):
         cdef int i
         cdef sos_attr_t c_attr
-        cdef sos_index_t c_idx
+        cdef dsos_index_t *c_idx
         s = '{{ "name" : "{0}",\n  "attrs" : ['.format(sos_schema_name(self.c_schema))
         for i in range(sos_schema_attr_count(self.c_schema)):
             c_attr = sos_schema_attr_by_id(self.c_schema, i)
@@ -763,7 +767,7 @@ cdef class Schema(SosObject):
             s += '    {{ "name" : "{0}", "type" : "{1}", "size" : {2}'.format(
                 sos_attr_name(c_attr), sos_type_strs[sos_attr_type(c_attr)],
                 sos_attr_size(c_attr))
-            c_idx = sos_attr_index(c_attr)
+            c_idx = dsos_attr_index(c_attr)
             if c_idx != NULL:
                 s += ', "indexed" : "true"'
             s += "}"
@@ -1262,7 +1266,7 @@ cdef class AttrIter(SosObject):
     find_sup(), and find_inf() for documentation on these methods.
     """
     cdef Attr attr
-    cdef sos_iter_t c_iter
+    cdef dsos_iter_t *c_iter
 
     def __init__(self, Attr attr):
         """Instantiate an AttrIter object
@@ -1271,13 +1275,13 @@ cdef class AttrIter(SosObject):
         attr    The Attr with the Index on which the iterator is being
                 created.
         """
-        self.c_iter = sos_attr_iter_new(attr.c_attr)
+        self.c_iter = dsos_attr_iter_new(attr.c_attr)
         self.attr = attr
         if self.c_iter == NULL:
             raise ValueError("The {0} attribute is not indexed".format(self.attr.name()))
 
     def prop_set(self, prop_name, b):
-        cdef sos_iter_flags_t f = sos_iter_flags_get(self.c_iter)
+        cdef sos_iter_flags_t f = dsos_iter_flags_get(self.c_iter)
         prop_names = {
             "unique" : SOS_ITER_F_UNIQUE,
             "inf_last_dup" : SOS_ITER_F_INF_LAST_DUP,
@@ -1288,12 +1292,12 @@ cdef class AttrIter(SosObject):
             f  = f | bit
         else:
             f = f & ~bit
-        sos_iter_flags_set(self.c_iter, f)
+        dsos_iter_flags_set(self.c_iter, f)
 
     def item(self):
         """Return the Object at the current iterator position"""
         cdef sos_obj_t c_obj
-        c_obj = sos_iter_obj(self.c_iter)
+        c_obj = dsos_iter_obj(self.c_iter)
         if c_obj:
             o = Object()
             o.assign(c_obj)
@@ -1303,7 +1307,7 @@ cdef class AttrIter(SosObject):
     def key(self):
         """Return the Key at the current iterator position"""
         cdef sos_key_t c_key
-        c_key = sos_iter_key(self.c_iter)
+        c_key = dsos_iter_key(self.c_iter)
         if c_key:
             k = Key(size=sos_key_len(c_key), attr=self.attr)
             k.assign(c_key, sos_attr_type(self.attr.c_attr))
@@ -1312,14 +1316,14 @@ cdef class AttrIter(SosObject):
 
     def begin(self):
         """Position the iterator at the first object in the index"""
-        cdef int rc = sos_iter_begin(self.c_iter)
+        cdef int rc = dsos_iter_begin(self.c_iter)
         if rc == 0:
             return True
         return False
 
     def end(self):
         """Position the iterator at the last object in the index"""
-        cdef int rc = sos_iter_end(self.c_iter)
+        cdef int rc = dsos_iter_end(self.c_iter)
         if rc == 0:
             return True
         return False
@@ -1331,7 +1335,7 @@ cdef class AttrIter(SosObject):
         False   There is no object at the new iterator position
         """
         cdef int rc
-        rc = sos_iter_next(self.c_iter)
+        rc = dsos_iter_next(self.c_iter)
         if rc == 0:
             return True
         return False
@@ -1342,7 +1346,7 @@ cdef class AttrIter(SosObject):
         True    There is an object at the new iterator position
         False   There is no object at the new iterator position
         """
-        cdef int rc = sos_iter_prev(self.c_iter)
+        cdef int rc = dsos_iter_prev(self.c_iter)
         if rc == 0:
             return True
         return False
@@ -1359,7 +1363,7 @@ cdef class AttrIter(SosObject):
         True   There is an object with the specified key
         False  There was no object with the specified key
         """
-        cdef int rc = sos_iter_find(self.c_iter, key.c_key)
+        cdef int rc = dsos_iter_find(self.c_iter, key.c_key)
         if rc == 0:
             return True
         return False
@@ -1378,7 +1382,7 @@ cdef class AttrIter(SosObject):
         False   Not found
 
         """
-        cdef int rc = sos_iter_sup(self.c_iter, key.c_key)
+        cdef int rc = dsos_iter_sup(self.c_iter, key.c_key)
         if rc == 0:
             return True
         return False
@@ -1393,7 +1397,7 @@ cdef class AttrIter(SosObject):
         True    Found
         False   Not found
         """
-        cdef int rc = sos_iter_inf(self.c_iter, key.c_key)
+        cdef int rc = dsos_iter_inf(self.c_iter, key.c_key)
         if rc == 0:
             return True
         return False
@@ -1411,10 +1415,10 @@ cdef class AttrIter(SosObject):
         """
         cdef const char *c_str
         cdef sos_pos_t c_pos
-        cdef int rc = sos_iter_pos_get(self.c_iter, &c_pos)
+        cdef int rc = dsos_iter_pos_get(self.c_iter, &c_pos)
         if rc != 0:
             return None
-        c_str = sos_pos_to_str(c_pos)
+        c_str = dsos_pos_to_str(c_pos)
         return c_str
 
     def set_pos(self, pos_str):
@@ -1424,9 +1428,9 @@ cdef class AttrIter(SosObject):
         -- String representation of the iterator position
         """
         cdef sos_pos_t c_pos
-        cdef int rc = sos_pos_from_str(&c_pos, pos_str.encode())
+        cdef int rc = dsos_pos_from_str(&c_pos, pos_str.encode())
         if rc == 0:
-            return sos_iter_pos_set(self.c_iter, c_pos)
+            return dsos_iter_pos_set(self.c_iter, c_pos)
         return rc
 
     def put_pos(self, pos_str):
@@ -1436,14 +1440,14 @@ cdef class AttrIter(SosObject):
         -- String representation of the iterator position
         """
         cdef sos_pos_t c_pos
-        cdef int rc = sos_pos_from_str(&c_pos, pos_str.encode())
+        cdef int rc = dsos_pos_from_str(&c_pos, pos_str.encode())
         if rc == 0:
-            return sos_iter_pos_put(self.c_iter, c_pos)
+            return dsos_iter_pos_put(self.c_iter, c_pos)
         return rc
 
     def __dealloc__(self):
         if self.c_iter != NULL:
-            sos_iter_free(self.c_iter)
+            dsos_iter_free(self.c_iter)
             self.c_iter = NULL
 
 TYPE_INT16 = SOS_TYPE_INT16
@@ -1583,7 +1587,7 @@ cdef class Attr(SosObject):
 
     def is_indexed(self):
         """Returns True if the attribute has an index"""
-        if sos_attr_index(self.c_attr) != NULL:
+        if dsos_attr_is_indexed(self.c_attr):
             return True
         return False
 
@@ -1680,8 +1684,8 @@ cdef class Attr(SosObject):
         return key
 
     def find(self, Key key):
-        cdef sos_index_t c_index = sos_attr_index(self.c_attr)
-        cdef sos_obj_t c_obj = sos_index_find(c_index, key.c_key)
+        cdef dsos_index_t *c_index = dsos_attr_index(self.c_attr)
+        cdef sos_obj_t c_obj = dsos_index_find(c_index, key.c_key)
         if c_obj == NULL:
             return None
         o = Object()
@@ -1700,7 +1704,7 @@ cdef class Attr(SosObject):
             return None
 
         key = NULL
-        c_obj = sos_index_find_max(sos_attr_index(self.c_attr), &key)
+        c_obj = dsos_index_find_max(dsos_attr_index(self.c_attr), &key)
         if c_obj == NULL:
             return None
         if key:
@@ -1727,7 +1731,7 @@ cdef class Attr(SosObject):
             return None
 
         key = NULL
-        c_obj = sos_index_find_min(sos_attr_index(self.c_attr), &key)
+        c_obj = dsos_index_find_min(dsos_attr_index(self.c_attr), &key)
         if c_obj == NULL:
             return None
         if key:
@@ -1743,12 +1747,12 @@ cdef class Attr(SosObject):
         return v
 
     def __str__(self):
-        cdef sos_index_t c_idx
+        cdef dsos_index_t *c_idx
         s = '{{ "name" : "{0}", "schema" : "{1}", "type" : "{2}", "size" : {3}'.format(
             sos_attr_name(self.c_attr), sos_schema_name(sos_attr_schema(self.c_attr)),
             sos_type_strs[sos_attr_type(self.c_attr)],
             sos_attr_size(self.c_attr))
-        c_idx = sos_attr_index(self.c_attr)
+        c_idx = dsos_attr_index(self.c_attr)
         if c_idx != NULL:
             s += ', "indexed" : "true"'
         s += '}'
@@ -2373,7 +2377,7 @@ cdef class Filter(object):
     ```
     """
     cdef Attr attr
-    cdef sos_filter_t c_filt
+    cdef dsos_filter_t *c_filt
     cdef sos_obj_t c_obj
     cdef double start_us
     cdef double end_us
@@ -2382,13 +2386,13 @@ cdef class Filter(object):
         """Positional Parameters:
         -- The primary filter attribute
         """
-        cdef sos_iter_t c_iter
+        cdef dsos_iter_t *c_iter
         self.attr = attr
-        c_iter = sos_attr_iter_new(attr.c_attr)
+        c_iter = dsos_attr_iter_new(attr.c_attr)
         if c_iter == NULL:
             raise ValueError("The attribute {0} must be indexed.".format(attr.name()))
 
-        self.c_filt = sos_filter_new(c_iter)
+        self.c_filt = dsos_filter_new(c_iter)
         self.start_us = 0.0
         self.end_us = 0.0
 
@@ -2524,8 +2528,8 @@ cdef class Filter(object):
                 self.end_us = <double>cond_v.data.prim.timestamp_.tv.tv_sec * 1.0e6 \
                               + <double>cond_v.data.prim.timestamp_.tv.tv_usec
 
-        rc = sos_filter_cond_add(self.c_filt, cond_attr.c_attr,
-                                 cond, cond_v)
+        rc = dsos_filter_cond_add(self.c_filt, cond_attr.c_attr,
+                                  cond, cond_v)
         sos_value_put(cond_v)
         sos_value_free(cond_v)
         if rc != 0:
@@ -2539,9 +2543,9 @@ cdef class Filter(object):
 
         """
         cdef sos_iter_flags_t flags
-        flags = sos_filter_flags_get(self.c_filt)
+        flags = dsos_filter_flags_get(self.c_filt)
         flags |= SOS_ITER_F_UNIQUE
-        sos_filter_flags_set(self.c_filt, flags)
+        dsos_filter_flags_set(self.c_filt, flags)
 
     def attr_iter(self):
         """Return the AttrIter for the primary attribute underlying this Filter"""
@@ -2549,7 +2553,7 @@ cdef class Filter(object):
 
     def begin(self):
         """Set the filter at the first object that matches all of the input conditions"""
-        cdef sos_obj_t c_obj = sos_filter_begin(self.c_filt)
+        cdef sos_obj_t c_obj = dsos_filter_begin(self.c_filt)
         if c_obj == NULL:
             return None
         o = Object()
@@ -2557,7 +2561,7 @@ cdef class Filter(object):
 
     def end(self):
         """Set the filter at the last object that matches all of the input conditions"""
-        cdef sos_obj_t c_obj = sos_filter_end(self.c_filt)
+        cdef sos_obj_t c_obj = dsos_filter_end(self.c_filt)
         if c_obj == NULL:
             return None
         o = Object()
@@ -2565,7 +2569,7 @@ cdef class Filter(object):
 
     def next(self):
         """Set the filter at the next object that matches all of the input conditions"""
-        cdef sos_obj_t c_obj = sos_filter_next(self.c_filt)
+        cdef sos_obj_t c_obj = dsos_filter_next(self.c_filt)
         if c_obj == NULL:
             return None
         o = Object()
@@ -2573,7 +2577,7 @@ cdef class Filter(object):
 
     def prev(self):
         """Set the filter at the previous object that matches all of the input conditions"""
-        cdef sos_obj_t c_obj = sos_filter_prev(self.c_filt)
+        cdef sos_obj_t c_obj = dsos_filter_prev(self.c_filt)
         if c_obj == NULL:
             return None
         o = Object()
@@ -2581,23 +2585,23 @@ cdef class Filter(object):
 
     def miss_count(self):
         """Return the filter miss compare count"""
-        return sos_filter_miss_count(self.c_filt)
+        return dsos_filter_miss_count(self.c_filt)
 
     def count(self):
         """Return the number of objects matching all conditions"""
         cdef size_t count = 0
-        cdef sos_obj_t c_o = sos_filter_begin(self.c_filt)
+        cdef sos_obj_t c_o = dsos_filter_begin(self.c_filt)
         if c_o == NULL:
             return count
         while c_o != NULL:
             count += 1
             sos_obj_put(c_o)
-            c_o = sos_filter_next(self.c_filt)
+            c_o = dsos_filter_next(self.c_filt)
         return count
 
     def obj(self):
         """Return the object at the currrent filter position"""
-        cdef sos_obj_t c_obj = sos_filter_obj(self.c_filt)
+        cdef sos_obj_t c_obj = dsos_filter_obj(self.c_filt)
         if c_obj:
             o = Object()
             return o.assign(c_obj)
@@ -2611,10 +2615,10 @@ cdef class Filter(object):
         """
         cdef const char *c_str
         cdef sos_pos_t c_pos
-        cdef int rc = sos_filter_pos_get(self.c_filt, &c_pos)
+        cdef int rc = dsos_filter_pos_get(self.c_filt, &c_pos)
         if rc != 0:
             return None
-        c_str = sos_pos_to_str(c_pos)
+        c_str = dsos_pos_to_str(c_pos)
         return c_str
 
     def set_pos(self, pos_str):
@@ -2628,9 +2632,9 @@ cdef class Filter(object):
         -- String representation of the iterator position
         """
         cdef sos_pos_t c_pos
-        cdef int rc = sos_pos_from_str(&c_pos, pos_str.encode())
+        cdef int rc = dsos_pos_from_str(&c_pos, pos_str.encode())
         if rc == 0:
-            return sos_filter_pos_set(self.c_filt, c_pos)
+            return dsos_filter_pos_set(self.c_filt, c_pos)
         return rc
 
     def put_pos(self, pos_str):
@@ -2640,9 +2644,9 @@ cdef class Filter(object):
         -- String representation of the iterator position
         """
         cdef sos_pos_t c_pos
-        cdef int rc = sos_pos_from_str(&c_pos, pos_str.encode())
+        cdef int rc = dsos_pos_from_str(&c_pos, pos_str.encode())
         if rc == 0:
-            return sos_filter_pos_put(self.c_filt, c_pos)
+            return dsos_filter_pos_put(self.c_filt, c_pos)
         return rc
 
     def as_ndarray(self, size_t count, shape=None, order='attribute', cont=False):
@@ -2835,9 +2839,9 @@ cdef class Filter(object):
                 raise ValueError("Error '{0}' processing the shape keyword parameter".format(str(e)))
 
         if cont:
-            c_o = sos_filter_next(self.c_filt)
+            c_o = dsos_filter_next(self.c_filt)
         else:
-            c_o = sos_filter_begin(self.c_filt)
+            c_o = dsos_filter_begin(self.c_filt)
 
         # determine the result depth in the 'attribute' dimension
         dim = 0
@@ -2904,14 +2908,14 @@ cdef class Filter(object):
                 sos_value_put(v)
             sos_obj_put(c_o)
 
-            c_o = sos_filter_next(self.c_filt)
+            c_o = dsos_filter_next(self.c_filt)
             idx += 1
             if idx >= count:
                 sos_obj_put(c_o)
                 break
 
         if idx < count:
-            c_o = sos_filter_end(self.c_filt)
+            c_o = dsos_filter_end(self.c_filt)
             sos_obj_put(c_o)
 
         free(res_attr)
@@ -3126,9 +3130,9 @@ cdef class Filter(object):
                 raise ValueError("Error '{0}' processing the shape keyword parameter".format(str(e)))
 
         if cont:
-            c_o = sos_filter_next(self.c_filt)
+            c_o = dsos_filter_next(self.c_filt)
         else:
-            c_o = sos_filter_begin(self.c_filt)
+            c_o = dsos_filter_begin(self.c_filt)
 
         # determine the result depth in the 'attribute' dimension
         dim = 0
@@ -3227,7 +3231,7 @@ cdef class Filter(object):
 
             # Get the next sample
             prev_time = obj_time
-            c_o = sos_filter_next(self.c_filt)
+            c_o = dsos_filter_next(self.c_filt)
             if c_o != NULL:
                 t = sos_value_init(&t_, c_o, t_attr)
                 obj_time = <double>t.data.prim.timestamp_.tv.tv_usec * 1.0e6 \
@@ -3290,7 +3294,7 @@ cdef class Filter(object):
             sos_obj_put(self.c_obj)
             self.c_obj = NULL
         if self.c_filt:
-            sos_filter_free(self.c_filt)
+            dsos_filter_free(self.c_filt)
             self.c_filt = NULL
 
 cdef class ColSpec:
@@ -3395,16 +3399,16 @@ cdef class ColSpec:
             return v.center(self.col_width, self.fill)
 
 cdef class Index(object):
-    cdef sos_index_t c_index
+    cdef dsos_index_t *c_index
     cdef sos_index_stat_s c_stats
 
     def __init__(self, Attr attr=None, name=None):
         if attr:
-            self.c_index = sos_attr_index(attr.c_attr)
+            self.c_index = dsos_attr_index(attr.c_attr)
         else:
             self.c_index = NULL
 
-    cdef assign(self, sos_index_t idx):
+    cdef assign(self, dsos_index_t *idx):
         self.c_index = idx
         return self
 
@@ -3422,14 +3426,14 @@ cdef class Index(object):
         """
         cdef int rc
         cdef char *args
-        cdef sos_index_t index
+        cdef dsos_index_t *index
         args = NULL
-        rc = sos_index_new(cont.c_cont, name, idx_type, key_type, args)
+        rc = dsos_index_new(cont.c_cont, name, idx_type, key_type, args)
         if rc != 0:
             raise ValueError("sos_index_new returned error {0} creating index {1}".format(rc, name))
 
     def open(self, Container cont, name):
-        index = sos_index_open(cont.c_cont, name)
+        index = dsos_index_open(cont.c_cont, name)
         if index == NULL:
             raise ValueError("sos_index_open returned {0} opening index {1}".\
                              format(errno, name))
@@ -3437,12 +3441,12 @@ cdef class Index(object):
 
     def insert(self, Key key, Object obj):
         cdef int rc
-        rc = sos_index_insert(self.c_index, key.c_key, obj.c_obj)
+        rc = dsos_index_insert(self.c_index, key.c_key, obj.c_obj)
         return rc
 
     def remove(self, Key key, Object obj):
         cdef int rc
-        rc = sos_index_remove(self.c_index, key.c_key, obj.c_obj)
+        rc = dsos_index_remove(self.c_index, key.c_key, obj.c_obj)
         return rc
 
     def insert_ref(self, Key key, ref):
@@ -3451,12 +3455,12 @@ cdef class Index(object):
 
         sref.ref.ods = ref[0]
         sref.ref.obj = ref[1]
-        rc = sos_index_insert_ref(self.c_index, key.c_key, sref)
+        rc = dsos_index_insert_ref(self.c_index, key.c_key, sref)
         return rc
 
     def remove_ref(self, Key key, sos_obj_ref_t ref):
         cdef int rc
-        rc = sos_index_remove_ref(self.c_index, key.c_key, &ref)
+        rc = dsos_index_remove_ref(self.c_index, key.c_key, &ref)
         return rc
 
     def find(self, Key key):
@@ -3470,7 +3474,7 @@ cdef class Index(object):
         Returns:
         -- The Object at the index position
         """
-        cdef sos_obj_t c_obj = sos_index_find(self.c_index, key.c_key)
+        cdef sos_obj_t c_obj = dsos_index_find(self.c_index, key.c_key)
         if c_obj != NULL:
             o = Object()
             return o.assign(c_obj)
@@ -3488,7 +3492,7 @@ cdef class Index(object):
         -- The reference data at the index position
         """
         cdef sos_obj_ref_t ref
-        cdef int rc = sos_index_find_ref(self.c_index, key.c_key, &ref)
+        cdef int rc = dsos_index_find_ref(self.c_index, key.c_key, &ref)
         if rc:
             return None
         return ( ref.ref.ods, ref.ref.obj )
@@ -3506,7 +3510,7 @@ cdef class Index(object):
         -- The Object at the index position or None if the infinum was not found
 
         """
-        cdef sos_obj_t c_obj = sos_index_find_inf(self.c_index, key.c_key)
+        cdef sos_obj_t c_obj = dsos_index_find_inf(self.c_index, key.c_key)
         if c_obj != NULL:
             o = Object()
             return o.assign(c_obj)
@@ -3524,7 +3528,7 @@ cdef class Index(object):
         Returns:
         -- The Object at the index position or None if the supremum was not found
         """
-        cdef sos_obj_t c_obj = sos_index_find_sup(self.c_index, key.c_key)
+        cdef sos_obj_t c_obj = dsos_index_find_sup(self.c_index, key.c_key)
         if c_obj != NULL:
             o = Object()
             return o.assign(c_obj)
@@ -3539,10 +3543,10 @@ cdef class Index(object):
         """
         cdef sos_obj_t c_obj
         cdef sos_key_t c_key
-        c_obj = sos_index_find_min(self.c_index, &c_key)
+        c_obj = dsos_index_find_min(self.c_index, &c_key)
         if c_obj != NULL:
             key = Key()
-            key.assign(c_key, sos_index_key_type(self.c_index))
+            key.assign(c_key, dsos_index_key_type(self.c_index))
             obj = Object()
             obj.assign(c_obj)
             return ( key, obj )
@@ -3557,10 +3561,10 @@ cdef class Index(object):
         """
         cdef sos_obj_t c_obj
         cdef sos_key_t c_key
-        c_obj = sos_index_find_max(self.c_index, &c_key)
+        c_obj = dsos_index_find_max(self.c_index, &c_key)
         if c_obj != NULL:
             key = Key()
-            key.assign(c_key, sos_index_key_type(self.c_index))
+            key.assign(c_key, dsos_index_key_type(self.c_index))
             obj = Object()
             obj.assign(c_obj)
             return ( key, obj )
@@ -3576,11 +3580,11 @@ cdef class Index(object):
         cdef sos_obj_t c_obj
         cdef sos_key_t c_key
         cdef sos_obj_ref_t c_ref
-        cdef int rc = sos_index_find_min_ref(self.c_index, &c_key, &c_ref)
+        cdef int rc = dsos_index_find_min_ref(self.c_index, &c_key, &c_ref)
         if rc:
             return ( None, None )
         key = Key()
-        key.assign(c_key, sos_index_key_type(self.c_index))
+        key.assign(c_key, dsos_index_key_type(self.c_index))
         return ( key, ( c_ref.ref.ods, c_ref.ref.obj ) )
 
     def find_max_ref(self):
@@ -3593,20 +3597,20 @@ cdef class Index(object):
         cdef sos_obj_t c_obj
         cdef sos_key_t c_key
         cdef sos_obj_ref_t c_ref
-        cdef int rc = sos_index_find_max_ref(self.c_index, &c_key, &c_ref)
+        cdef int rc = dsos_index_find_max_ref(self.c_index, &c_key, &c_ref)
         if rc:
             return ( None, None )
         key = Key()
-        key.assign(c_key, sos_index_key_type(self.c_index))
+        key.assign(c_key, dsos_index_key_type(self.c_index))
         return ( key, ( c_ref.ref.ods, c_ref.ref.obj ) )
 
     def name(self):
         """Return the name of the index"""
-        return sos_index_name(self.c_index)
+        return dsos_index_name(self.c_index)
 
     def key_type(self):
         """Return the Sos type-id for the key"""
-        return sos_index_key_type(self.c_index)
+        return dsos_index_key_type(self.c_index)
 
     def stats(self):
         """Return a dictionary of index statistics as follows:
@@ -3614,11 +3618,11 @@ cdef class Index(object):
             duplicates  - Number of duplicate keys
             size        - The storage size consumed by the index in bytes
         """
-        cdef int rc = sos_index_stat(self.c_index, &self.c_stats)
+        cdef int rc = dsos_index_stat(self.c_index, &self.c_stats)
         return self.c_stats
 
     def show(self):
-        sos_index_print(self.c_index, NULL);
+        dsos_index_print(self.c_index, NULL);
 
 ################################
 # Object getter functions
@@ -4428,24 +4432,29 @@ cdef class Object(object):
     cdef sos_schema_t c_schema
     cdef id_list
     cdef name_dict
+    cdef int needs_dsos_create
 
     def __init__(self):
         self.c_obj = NULL
         self.c_schema = NULL
+        self.needs_dsos_create = False
 
     def __del__(self):
         self.__dealloc__()
 
     def __dealloc__(self):
         if self.c_obj:
+            if self.needs_dsos_create:
+                dsos_obj_create(self.c_obj, NULL, NULL);
             sos_obj_put(self.c_obj)
             self.c_obj = NULL
 
-    cdef assign(self, sos_obj_t obj):
+    cdef assign(self, sos_obj_t obj, needs_dsos_create = False):
         if obj == NULL:
             raise ValueError("obj argument cannot be NULL")
         self.c_obj = obj
         self.c_schema = sos_obj_schema(obj)
+        self.needs_dsos_create = needs_dsos_create
         return self
 
     cdef get_py_value(self, sos_obj_t c_obj, sos_attr_t c_attr, sos_value_data_t c_data):
@@ -4595,7 +4604,9 @@ cdef class Object(object):
         """
         if self.c_obj == NULL:
             self.abort("There is no container object associated with this Object")
-        return sos_obj_index(self.c_obj)
+        if self.needs_dsos_create:
+            dsos_obj_create(self.c_obj, NULL, NULL);
+            self.needs_dsos_create = False
 
     def index_del(self):
         """
@@ -4603,13 +4614,13 @@ cdef class Object(object):
         """
         if self.c_obj == NULL:
             self.abort("There is no container object associated with this Object")
-        return sos_obj_remove(self.c_obj)
+        return dsos_obj_remove(self.c_obj)
 
     def delete(self):
         """
         Remove the object from the container
         """
-        sos_obj_delete(self.c_obj)
+        dsos_obj_delete(self.c_obj)
         sos_obj_put(self.c_obj)
         self.c_obj = NULL
 
@@ -5072,9 +5083,9 @@ cdef class QueryInputer:
         for filt_no in range(start, filt_count):
             f = query.filters[filt_no]
             if reset_:
-                c_obj = sos_filter_begin(f.c_filt)
+                c_obj = dsos_filter_begin(f.c_filt)
             else:
-                c_obj = sos_filter_next(f.c_filt)
+                c_obj = dsos_filter_next(f.c_filt)
             if c_obj == NULL:
                 return False
             else:
@@ -5084,7 +5095,7 @@ cdef class QueryInputer:
         for row_no in range(start+1, self.row_limit):
             for filt_no in range(0, filt_count):
                 f = query.filters[filt_no]
-                c_obj = sos_filter_next(f.c_filt)
+                c_obj = dsos_filter_next(f.c_filt)
                 if c_obj == NULL:
                     return False
                 idx = (row_no * filt_count) + filt_no
@@ -5793,3 +5804,9 @@ cdef class Query:
             else:
                 return None
         return self.make_row(cursor)
+
+cdef class Dsos(object):
+    def __init__(self, config_path):
+        ret = dsos_init(config_path)
+        if ret:
+            raise Exception("error initializing DSOS")

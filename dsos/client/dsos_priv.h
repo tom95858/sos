@@ -32,6 +32,10 @@ typedef struct {
 	void	*ptr2;
 } dsos_ptr_tuple_t;
 
+enum {
+	DSOS_OBJ_CREATED = 1,
+};
+
 /* This will be a zap_new() parameter eventually. */
 #define SQ_DEPTH	4
 
@@ -77,6 +81,7 @@ typedef enum dsos_rpc_flags_e {
 	DSOS_RPC_WAIT			= 0x00000020,
 	DSOS_RPC_PERSIST_RESPONSES	= 0x00000040,
 	DSOS_RPC_PUT			= 0x00000080,
+	DSOS_RPC_FREE_STATUS		= 0x00000100,
 } dsos_rpc_flags_t;
 
 typedef struct dsos_rpc_bufs_s {
@@ -106,30 +111,29 @@ struct rpc_rbn {
 };
 
 /*
- * DSOS container object. This encapsulates a vector of container handles,
- * one per server.
+ * The following DSOS objects are vectors of handles to the
+ * corresponding local SOS objects on the servers.
  */
+
 typedef struct dsos_s {
 	dsos_handle_t	*handles;
 } dsos_t;
 
-/*
- * DSOS partition object. This encapsulates a vector of partition handles,
- * one per server.
- */
 typedef struct dsos_part_s {
 	dsos_handle_t	*handles;
 } dsos_part_t;
 
-/*
- * DSOS schema object. This encapsulates a vector of schema handles,
- * one per server.
- */
-typedef struct dsos_schema_s {
-	dsos_t		*cont;                // container
-	dsos_handle_t	*handles;             // vector of server handles
-	sos_schema_t	sos_schema;           // local SOS schema handle
-} dsos_schema_t;
+typedef struct dsos_index_s {
+	dsos_handle_t	*handles;
+} dsos_index_t;
+
+typedef struct dsos_part_iter_s {
+	dsos_handle_t	*handles;
+} dsos_part_iter_t;
+
+typedef struct dsos_container_index_iter_s {
+	dsos_handle_t	*handles;
+} dsos_container_index_iter_t;
 
 /*
  * DSOS iteration object.
@@ -141,7 +145,7 @@ struct iter_rbn {
 typedef struct dsos_iter_s {
 	pthread_mutex_t	lock;
 	pthread_cond_t	prefetch_complete;
-	dsos_schema_t	*schema;
+	sos_schema_t	schema;
 	sos_attr_t	attr;                 // attr this is iterating over
 	dsos_handle_t	*handles;             // vector of server sos_iter_t handles
 	int		done;                 // =1 when all servers are done w/the iteration
@@ -152,6 +156,13 @@ typedef struct dsos_iter_s {
 	size_t		obj_sz;               // object size this iterates over
 	struct rbt	rbt;                  // for finding min key value of recvd objs
 } dsos_iter_t;
+
+/*
+ * DSOS filter object. This is basically an interator with a different API.
+ */
+typedef struct dsos_filter_s {
+	dsos_iter_t	*iter;
+} dsos_filter_t;
 
 /*
  * Connection object.
@@ -180,6 +191,7 @@ int		dsos_rpc_send_one(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, int server_num);
 void		dsos_rpc_set_server(dsos_rpc_t *rpc, int server_num);
 
 int		dsos_rpc_pack_fits(dsos_rpc_t *rpc, int len);
+void		dsos_rpc_pack_attr_all(dsos_rpc_t *rpc, sos_attr_t attr);
 void		dsos_rpc_pack_handle(dsos_rpc_t *rpc, dsos_handle_t handle);
 void		dsos_rpc_pack_handles(dsos_rpc_t *rpc, dsos_handle_t *handles);
 void		dsos_rpc_pack_key_one(dsos_rpc_t *rpc, sos_key_t key);
@@ -216,8 +228,8 @@ int		dsos_connect(const char *host, const char *service, int server_id, int wait
 void		dsos_disconnect(void);
 void		dsos_err_init(void);
 void		dsos_free(void *ptr);
-sos_obj_t	dsos_obj_malloc(dsos_schema_t *schema);
-sos_obj_t	*dsos_obj_calloc(int num_objs, dsos_schema_t *schema);
+sos_obj_t	dsos_obj_malloc(sos_schema_t schema);
+sos_obj_t	*dsos_obj_calloc(int num_objs, sos_schema_t schema);
 const char	*dsos_msg_type_to_str(int id);
 int		dsos_obj_server(sos_obj_t obj);
 

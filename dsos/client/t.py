@@ -128,7 +128,7 @@ if __name__ == "__main__":
                                                         ("*int2","uint64"),
                                                         ("*int3","uint64"),
                                                         ("data","char[{}]".format(sz)) ]))
-            t.numRecs(100)
+            t.numRecs(20)
             t.cont("/tmp/cont-py-%%.sos")
             if first:
                 t.doCont()

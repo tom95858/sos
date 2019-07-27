@@ -361,6 +361,36 @@ static void handle_msg(zap_ep_t ep, dsos_msg_t *msg, size_t len)
 	    case DSOS_RPC_SCHEMA_BY_NAME:
 		rpc_handle_schema_by_name(rpc);
 		break;
+	    case DSOS_RPC_SCHEMA_BY_ID:
+		rpc_handle_schema_by_id(rpc);
+		break;
+	    case DSOS_RPC_SCHEMA_FIRST:
+		rpc_handle_schema_first(rpc);
+		break;
+	    case DSOS_RPC_SCHEMA_NEXT:
+		rpc_handle_schema_next(rpc);
+		break;
+	    case DSOS_RPC_FILTER_NEW:
+		rpc_handle_filter_new(rpc);
+		break;
+	    case DSOS_RPC_FILTER_FREE:
+		rpc_handle_filter_free(rpc);
+		break;
+	    case DSOS_RPC_FILTER_STEP:
+		rpc_handle_filter_step(rpc);
+		break;
+	    case DSOS_RPC_FILTER_COND_ADD:
+		rpc_handle_filter_cond_add(rpc);
+		break;
+	    case DSOS_RPC_FILTER_MISS_COUNT:
+		rpc_handle_filter_miss_count(rpc);
+		break;
+	    case DSOS_RPC_FILTER_FLAGS_GET:
+		rpc_handle_filter_flags_get(rpc);
+		break;
+	    case DSOS_RPC_FILTER_FLAGS_SET:
+		rpc_handle_filter_flags_set(rpc);
+		break;
 	    default:
 		dsosd_error("unhandled msg type %d rpc %p ep %p\n", msg->hdr.type, rpc, ep);
 		break;
@@ -430,15 +460,17 @@ void dsosd_client_get(dsosd_client_t *client)
 	dsosd_debug("%p refcount now %d\n", client, client->refcount);
 }
 
-static int iter_free_traverse(struct rbn *rbn, void *ctxt, int level)
+static int handle_dump_traverse(struct rbn *rbn, void *ctxt, int level)
 {
 	struct ptr_rbn	*rbn_ptr = (struct ptr_rbn *)rbn;
 
-	if (rbn_ptr->type == DSOSD_HANDLE_ITER) {
-		dsosd_debug("freeing iterator %p\n", rbn_ptr->ptr);
-		sos_iter_free((sos_iter_t)rbn_ptr->ptr);
-	}
-	return 0;
+	dsosd_debug("%s\t%p\n", dsosd_handle_type_str(rbn_ptr->type), rbn_ptr->ptr);
+}
+
+static void dump_handles(dsosd_client_t *client)
+{
+	dsosd_debug("client %p handles:\n", client);
+	rbt_traverse(&client->handle_rbt, handle_dump_traverse, NULL);
 }
 
 void dsosd_client_put(dsosd_client_t *client)
@@ -454,10 +486,10 @@ void dsosd_client_put(dsosd_client_t *client)
 		if (client->heap_buf)
 			free(client->heap_buf);
 #endif
-		/* Free all open iterators, then close all open containers. */
-
-		rbt_traverse(&client->handle_rbt, iter_free_traverse, NULL);
-
+#ifdef DSOSD_DEBUG
+		dump_handles(client);
+#endif
+		/* Close all open containers. */
 		while ((rbn = (struct ptr_rbn *)rbt_min(&client->handle_rbt))) {
 			if (rbn->type == DSOSD_HANDLE_CONT) {
 				dsosd_debug("closing container %p\n", rbn->ptr);
