@@ -55,6 +55,10 @@ int dsos_config_read(const char *config_file)
 	if (j)
 		g.opts.heap_grain_sz = json_value_int(j);
 
+	j = json_attr_find(g.config, "max_rpc_size");
+	if (j)
+		g.opts.max_rpc_sz = json_value_int(j);
+
 	json_parser_free(parser);
 	return 0;
 }

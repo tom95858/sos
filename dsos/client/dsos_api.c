@@ -277,16 +277,19 @@ static int iter_rbn_cmp_fn(void *tree_key, void *key)
 
 static void iter_rbt_insert(dsos_iter_t *iter, sos_value_t v, sos_obj_t obj)
 {
+	char		buf[16];
 	struct iter_rbn	*rbn = calloc(1, sizeof(struct iter_rbn));
+
 	if (!rbn)
 		dsos_fatal("out of memory");
 	rbn->rbn.key = (void *)v;
 	rbn->obj     = obj;
 
-	rbt_ins(&iter->rbt, (void *)rbn);
+	dsos_debug("iter %p inserting value %s from obj %08lx%08lx\n",
+		   iter, sos_value_to_str(v,buf,sizeof(buf)),
+		   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
 
-	dsos_debug("iter %p inserted value %ld from obj %08lx%08lx\n",
-		   iter, v->data->prim.uint64_, obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
+	rbt_ins(&iter->rbt, (void *)rbn);
 }
 
 static void iter_insert_obj(dsos_iter_t *iter, sos_obj_t obj)
@@ -296,14 +299,15 @@ static void iter_insert_obj(dsos_iter_t *iter, sos_obj_t obj)
 
 static sos_obj_t iter_rbt_min(dsos_iter_t *iter)
 {
+	char		buf[16];
 	sos_obj_t	obj = NULL;
 	struct iter_rbn	*rbn;
 
 	rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
 	if (rbn) {
 		obj = rbn->obj;
-		dsos_debug("iter %p min value %ld obj_id %08lx%08lx\n",
-			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_,
+		dsos_debug("iter %p min value %s obj_id %08lx%08lx\n",
+			   iter, sos_value_to_str((sos_value_t)rbn->rbn.key,buf,sizeof(buf)),
 			   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
 		rbt_del(&iter->rbt, (struct rbn *)rbn);
 		sos_value_put(rbn->rbn.key);
@@ -317,14 +321,15 @@ static sos_obj_t iter_rbt_min(dsos_iter_t *iter)
 
 static sos_obj_t iter_get_min(dsos_iter_t *iter)
 {
+	char		buf[16];
 	sos_obj_t	obj = NULL;
 	struct iter_rbn	*rbn;
 
 	rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
 	if (rbn) {
 		obj = rbn->obj;
-		dsos_debug("iter %p min value %ld obj_id %08lx%08lx\n",
-			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_,
+		dsos_debug("iter %p min value %s obj_id %08lx%08lx\n",
+			   iter, sos_value_to_str((sos_value_t)rbn->rbn.key,buf,sizeof(buf)),
 			   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
 	} else {
 		dsos_debug("iter %p rbt empty\n", iter);

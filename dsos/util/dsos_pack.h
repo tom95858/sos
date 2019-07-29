@@ -6,12 +6,14 @@
 #include <sos/sos.h>
 #include "../server/dsos_rpc_msg.h"
 
+typedef struct dsos_buf_s	dsos_buf_t;
+
 typedef struct dsos_buf_s {
-	dsos_msg_t	*msg;                   // the formatted msg
-	size_t		max_len;                // # bytes allocated for msg
-	size_t		len;                    // actual size of msg
-	void		(*free_fn)(void *ptr);  // set if msg needs to be freed
-	char		*p;                     // pack/unpack cursor
+	dsos_msg_t		*msg;                      // the formatted msg
+	size_t			allocated;                 // # bytes allocated for msg
+	size_t			len;                       // # bytes used so far
+	void			(*free_fn)(void *ptr);     // called to free msg
+	char			*p;                        // pack/unpack cursor
 } dsos_buf_t;
 
 int		dsos_pack_buf(dsos_buf_t *buf, void *ptr, int len);

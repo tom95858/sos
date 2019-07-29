@@ -13,17 +13,17 @@ dsosd_rpc_t *dsosd_rpc_new(dsosd_client_t *client, dsos_msg_t *msg, size_t len)
 	rpc->client   = client;
 	rpc->ctxt     = NULL;
 
-	rpc->req.free_fn = NULL;
-	rpc->req.len     = len;
-	rpc->req.max_len = len;
-	rpc->req.msg     = msg;
-	rpc->req.p       = (char *)(rpc->req.msg + 1);
+	rpc->req.free_fn   = NULL;
+	rpc->req.len       = len;
+	rpc->req.allocated = len;
+	rpc->req.msg       = msg;
+	rpc->req.p         = (char *)(rpc->req.msg + 1);
 
-	rpc->resp.free_fn = free;
-	rpc->resp.len     = sizeof(dsos_msg_t);
-	rpc->resp.max_len = zap_max_msg(g.zap);
-	rpc->resp.msg     = (dsos_msg_t *)dsosd_malloc(rpc->resp.max_len);
-	rpc->resp.p       = (char *)(rpc->resp.msg + 1);
+	rpc->resp.free_fn   = free;
+	rpc->resp.len       = sizeof(dsos_msg_t);
+	rpc->resp.allocated = zap_max_msg(g.zap);
+	rpc->resp.msg       = (dsos_msg_t *)dsosd_malloc(rpc->resp.allocated);
+	rpc->resp.p         = (char *)(rpc->resp.msg + 1);
 
 	rpc->resp.msg->hdr.type   = msg->hdr.type;
 	rpc->resp.msg->hdr.id     = msg->hdr.id;
@@ -107,18 +107,26 @@ void dsosd_rpc_complete_with_obj(dsosd_rpc_t *rpc, sos_obj_t obj, uint64_t obj_r
 
 zap_err_t dsosd_rpc_complete(dsosd_rpc_t *rpc, int status)
 {
+	int		to_send;
+	uint32_t	len;
+	char		*frame;
 	zap_err_t	zerr;
 
 	/* Handle response-buffer serialization overflow from packing the response. */
 	if (rpc->resp.p == NULL) {
-		rpc->resp.len = sizeof(dsos_msg_t);
+		len = sizeof(dsos_msg_t);
 		status = E2BIG;
+	} else {
+		len = rpc->resp.len;
 	}
 
-	dsosd_rpc_debug("rpc %p ep %p msg %p id %ld len %d status %d\n", rpc, rpc->client->ep,
+	dsosd_rpc_debug("rpc %p %s ep %p msg %p id %ld len %d status %d\n", rpc,
+			dsos_rpc_type_to_str(rpc->resp.msg->hdr.type),
+			rpc->client->ep,
 			rpc->resp.msg, rpc->resp.msg->hdr.id, rpc->resp.len, status);
 
 	rpc->resp.msg->hdr.status = status;
+	rpc->resp.msg->hdr.len    = len;
 
 #ifdef RPC_DEBUG
 	{
@@ -130,11 +138,24 @@ zap_err_t dsosd_rpc_complete(dsosd_rpc_t *rpc, int status)
 	}
 #endif
 
-	zerr = zap_send(rpc->client->ep, rpc->resp.msg, rpc->resp.len);
-	if (zerr)
-		dsosd_error("zap_send ep %p msg %p len %d zerr %d %s\n",
-			    rpc->client->ep, rpc->resp.msg, rpc->resp.len, zerr,
-			    zap_err_str(zerr));
+	if (len > zap_max_msg(g.zap)) {
+		dsosd_debug("len %d sending as multiple\n", len);
+		rpc->resp.msg->hdr.flags |= DSOS_RPC_FLAGS_MULTIPLE;
+	}
+
+	frame = (char *)rpc->resp.msg;
+	while (len > 0) {
+		to_send = len > zap_max_msg(g.zap) ? zap_max_msg(g.zap) : len;
+		zerr = zap_send(rpc->client->ep, frame, to_send);
+		if (zerr != ZAP_ERR_OK) {
+			dsosd_error("zap_send ep %p msg %p len %d zerr %d %s\n",
+				    rpc->client->ep, rpc->resp.msg, rpc->resp.len, zerr,
+				    zap_err_str(zerr));
+			break;
+		}
+		frame += to_send;
+		len   -= to_send;
+	}
 	dsosd_rpc_put(rpc);
 	return zerr;
 }

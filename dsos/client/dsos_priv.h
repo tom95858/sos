@@ -41,12 +41,14 @@ enum {
 
 #define DSOS_DEFAULT_SHARED_HEAP_SZ		48*1024*1024
 #define DSOS_DEFAULT_SHARED_HEAP_GRAIN_SZ	32
+#define DSOS_DEFAULT_MAX_RPC_SZ			1024*1024
 
 /* Options. */
 struct opts_s {
 	char	*zap_prov_name;        // zap provider to use
 	size_t	heap_sz;               // heap size in bytes (gets 4k roundup)
 	size_t	heap_grain_sz;         // heap min alloc size
+	size_t	max_rpc_sz;            // max allowed RPC message size in bytes
 };
 
 /*
@@ -176,6 +178,7 @@ typedef struct dsos_conn_s {
 	int			conn_status;    // connection error status
 	sem_t			conn_sem;       // connect semaphore
 	sem_t			flow_sem;       // flow-control semaphore
+	dsos_buf_t		msg;            // buf for multi-message RPCs
 } dsos_conn_t;
 
 /* Internal API. */
@@ -244,9 +247,17 @@ int		dsos_obj_server(sos_obj_t obj);
 		assert(0);							\
 	} while (0);
 
-static inline char *dsos_malloc(size_t len)
+static inline void *dsos_malloc(size_t len)
 {
-	char *ret = malloc(len);
+	void *ret = malloc(len);
+	if (!ret)
+		dsos_fatal("out of memory\n");
+	return ret;
+}
+
+static inline void *dsos_calloc(size_t n, size_t len)
+{
+	void *ret = calloc(n, len);
 	if (!ret)
 		dsos_fatal("out of memory\n");
 	return ret;

@@ -200,6 +200,17 @@ static int OBJ_ARRAY_cmp(sos_value_t a, sos_value_t b, size_t size)
 	return a_len - b_len;
 }
 
+static int JOIN_cmp(sos_value_t a, sos_value_t b, size_t size)
+{
+	size_t	a_len = sos_array_count(a);
+	size_t	b_len = sos_array_count(b);
+	size_t	cmp_len = a_len < b_len ? a_len : b_len;
+	int ret = memcmp(a->data, b->data, cmp_len);
+	if (ret == 0)
+		ret = a_len - b_len;
+	return ret;
+}
+
 #define ARRAY_CMP(_n_, _t_, _f_)				\
 static int _n_ ## _cmp(sos_value_t a, sos_value_t b, size_t size) \
 {								\
@@ -251,6 +262,7 @@ static cmp_fn_t cmp_fn_table[] = {
 	[SOS_TYPE_DOUBLE_ARRAY] = DOUBLE_ARRAY_cmp,
 	[SOS_TYPE_LONG_DOUBLE_ARRAY] = LONG_DOUBLE_ARRAY_cmp,
 	[SOS_TYPE_OBJ_ARRAY] = OBJ_ARRAY_cmp,
+	[SOS_TYPE_JOIN] = JOIN_cmp,
 };
 
 /**

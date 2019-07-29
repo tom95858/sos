@@ -36,7 +36,8 @@ typedef enum {
 /* RPC flags. */
 
 typedef enum {
-	DSOS_RPC_FLAGS_INLINE		= 0x00000001,
+	DSOS_RPC_FLAGS_INLINE		= 0x00000001,   // object data is in-line
+	DSOS_RPC_FLAGS_MULTIPLE		= 0x00000002,   // RPC spans multiple zap messages
 } dsos_msg_flags_t;
 
 enum {
@@ -58,6 +59,7 @@ typedef struct dsos_msg_hdr {
 	uint16_t	type;
 	uint16_t	status;
 	uint32_t	flags;
+	uint32_t	len;
 } dsos_msg_hdr_t;
 
 typedef struct dsos_msg_s {

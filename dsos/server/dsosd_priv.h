@@ -61,11 +61,8 @@ typedef struct dsosd_rpc_s {
 	dsos_buf_t		req;           // request msg (from client)
 	dsos_buf_t		resp;          // response msg (to client)
 	void			*ctxt;
-#if 1
-	// The following field goes away once SOS can map the ODS maps
-	// so objects can be RMA'd directly.
-	void			*rma_buf;      // XXX buf from registered heap (temporary)
-#endif
+	void			*rma_buf;      // buf from shared heap
+	int			rma_len;       // len of buf
 } dsosd_rpc_t;
 
 /* Red-black tree node to map a string to a pointer. */
@@ -107,6 +104,7 @@ typedef struct dsosd_client_s {
 	char			*heap_buf;     // mapped buffer for heap
 	size_t			heap_sz;       // size of mapped heap
 #endif
+	dsos_buf_t		msg;           // buf for multi-message RPCs
 } dsosd_client_t;
 
 void		dsosd_client_get(dsosd_client_t *client);

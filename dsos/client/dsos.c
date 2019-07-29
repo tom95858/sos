@@ -122,6 +122,8 @@ int dsos_init(const char *config_filename)
 	if (ret = dsos_err_status(dsos_errno))
 		return ret;
 
+	if (!g.opts.max_rpc_sz)
+		g.opts.max_rpc_sz = DSOS_DEFAULT_MAX_RPC_SZ;
 	dsos_rpc_init();
 
 	return 0;

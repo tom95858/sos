@@ -165,6 +165,7 @@ void rpc_handle_obj_create(dsosd_rpc_t *rpc)
 		 * scratch buffer and then memcpy into the object from
 		 * that in the completion handler.
 		 */
+		rpc->rma_len = remote_len;
 		rpc->rma_buf = mm_alloc(client->heap, remote_len);
 		if (!rpc->rma_buf)
 			dsosd_fatal("could not alloc from shared heap\n");
@@ -539,10 +540,6 @@ void rpc_handle_schema_from_template(dsosd_rpc_t *rpc)
 		ret = EINVAL;
  out:
 	dsosd_debug("rpc %p: schema %p ret %d\n", rpc, schema, ret);
-#if 1
-	sos_schema_print(schema, stdout);
-	fflush(stdout);
-#endif
 	dsosd_rpc_complete(rpc, ret);
 }
 

@@ -212,16 +212,14 @@ dsos_rpc_t *dsos_rpc_new(dsos_rpc_flags_t flags, dsos_rpc_type_t type)
 	dsos_rpc_t	*rpc;
 	dsos_buf_t	buf;
 	dsos_buf_t	null_buf = {
-		.msg     = NULL,
-		.max_len = 0,
-		.len     = 0,
-		.free_fn = NULL,
-		.p       = NULL
+		.msg        = NULL,
+		.allocated  = 0,
+		.len        = 0,
+		.free_fn    = NULL,
+		.p          = NULL
 	};
 
-	rpc = malloc(sizeof(dsos_rpc_t));
-	if (!rpc)
-		dsos_fatal("out of memory");
+	rpc = dsos_malloc(sizeof(dsos_rpc_t));
 	rpc->refcount    = 1;
 	rpc->flags       = flags;
 	rpc->status      = dsos_err_new();
@@ -231,20 +229,18 @@ dsos_rpc_t *dsos_rpc_new(dsos_rpc_flags_t flags, dsos_rpc_type_t type)
 	rpc->ctxt2.ptr2  = NULL;
 	rpc->num_servers = num_servers;
 	rpc->num_pend    = 0;
-	rpc->bufs        = (dsos_rpc_bufs_t *)malloc(num_servers * sizeof(dsos_rpc_bufs_t));
+	rpc->bufs        = (dsos_rpc_bufs_t *)dsos_malloc(num_servers * sizeof(dsos_rpc_bufs_t));
 	rpc->buf         = rpc->bufs;
-	if (!rpc->bufs)
-		dsos_fatal("out of memory");
 
 	pthread_mutex_lock(&rpc_id_lock);
 	dsos_debug("rpc %p ids %ld..%ld for %d server%s\n", rpc,
 		   rpc_next_id, rpc_next_id+num_servers-1, num_servers, num_servers==1?"":"s");
 	for (i = 0; i < num_servers; ++i) {
-		buf.free_fn = free;
-		buf.len     = sizeof(dsos_msg_t);
-		buf.max_len = zap_max_msg(g.zap);
-		buf.msg     = malloc(buf.max_len);
-		buf.p       = (char *)(buf.msg + 1);
+		buf.free_fn    = free;
+		buf.len        = sizeof(dsos_msg_t);
+		buf.allocated  = zap_max_msg(g.zap);
+		buf.msg        = malloc(buf.allocated);
+		buf.p          = (char *)(buf.msg + 1);
 		buf.msg->hdr.id     = rpc_next_id++;
 		buf.msg->hdr.type   = type;
 		buf.msg->hdr.flags  = 0;
@@ -272,9 +268,6 @@ void dsos_rpc_put(dsos_rpc_t *rpc)
 		dsos_debug("freeing rpc %p flags 0x%x num_servers %d\n", rpc, rpc->flags, rpc->num_servers);
 		for (i = 0; i < rpc->num_servers; ++i) {
 			if (rpc->bufs[i].req.free_fn && rpc->bufs[i].req.msg) {
-#if 0
-				printf("Bo: freeing %p\n", rpc->bufs[i].req.msg);
-#endif
 				rpc->bufs[i].req.free_fn(rpc->bufs[i].req.msg);
 			}
 			if (rpc->bufs[i].resp.free_fn && rpc->bufs[i].resp.msg)
@@ -307,7 +300,9 @@ int dsos_rpc_send_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_rpc_cb_t cb, 
 
 int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 {
-	int		i, n, ret, server_num;
+	int		i, n, ret, server_num, to_send;
+	uint32_t	len;
+	char		*frame;
 	zap_err_t	zerr;
 	zap_ep_t	ep;
 	dsos_conn_t	*conn;
@@ -335,7 +330,7 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 	dsos_rpc_get(rpc);
 
 	for (i = 0; i < rpc->num_servers; ++i) {
-		if (rpc->bufs[i].req.len > rpc->bufs[i].req.max_len) {
+		if (rpc->bufs[i].req.len > rpc->bufs[i].req.allocated) {
 			dsos_err_set_local(rpc->status, i, ZAP_ERR_PARAMETER);
 			continue;
 		}
@@ -343,9 +338,7 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 		server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
 		conn = &g.conns[server_num];
 
-		rbn = calloc(1, sizeof(struct rpc_rbn));
-		if (!rbn)
-			dsos_fatal("out of memory");
+		rbn = dsos_calloc(1, sizeof(struct rpc_rbn));
 		rbn->rbn.key = (void *)rpc->bufs[i].req.msg->hdr.id;
 		rbn->rpc = rpc;
 
@@ -370,11 +363,27 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 		free(s);
 		}
 #endif
-		zerr = zap_send(conn->ep, rpc->bufs[i].req.msg, rpc->bufs[i].req.len);
-		if (zerr != ZAP_ERR_OK)
-			dsos_error("send err %d (%s) server %d ep %p len %d\n",
-				   zerr, zap_err_str(zerr), server_num, conn->ep, rpc->bufs[i].req.len);
-		dsos_err_set_local(rpc->status, i, zerr);
+		len = rpc->bufs[i].req.len;
+		rpc->bufs[i].req.msg->hdr.len = len;
+
+		if (len > zap_max_msg(g.zap)) {
+			dsos_debug("len %d sending as multiple\n", len);
+			rpc->bufs[i].req.msg->hdr.flags |= DSOS_RPC_FLAGS_MULTIPLE;
+		}
+
+		frame = (char *)rpc->bufs[i].req.msg;
+		while (len > 0) {
+			to_send = len > zap_max_msg(g.zap) ? zap_max_msg(g.zap) : len;
+			zerr = zap_send(conn->ep, frame, to_send);
+			if (zerr != ZAP_ERR_OK) {
+				dsos_error("send err %d (%s) server %d ep %p len %d\n", zerr,
+					   zap_err_str(zerr), server_num, conn->ep, to_send);
+				dsos_err_set_local(rpc->status, i, zerr);
+				break;
+			}
+			frame += to_send;
+			len   -= to_send;
+		}
 	}
 	if (dsos_err_status(rpc->status) & DSOS_ERR_LOCAL) {
 		dsos_rpc_put(rpc);
@@ -425,18 +434,18 @@ void dsos_rpc_handle_resp(dsos_conn_t *conn, dsos_msg_t *resp, size_t len)
 		buf = &rpc->bufs[conn->server_id];
 
 	if (rpc->flags & DSOS_RPC_PERSIST_RESPONSES) {
-		buf->resp.msg     = (dsos_msg_t *)dsos_malloc(len);
-		buf->resp.free_fn = free;
-		buf->resp.max_len = len;
-		buf->resp.len     = len;
-		buf->resp.p       = (char *)(buf->resp.msg + 1);
+		buf->resp.msg       = (dsos_msg_t *)dsos_malloc(len);
+		buf->resp.free_fn   = free;
+		buf->resp.allocated = len;
+		buf->resp.len       = len;
+		buf->resp.p         = (char *)(buf->resp.msg + 1);
 		memcpy(buf->resp.msg, resp, len);
 	} else {
-		buf->resp.msg     = resp;
-		buf->resp.free_fn = NULL;
-		buf->resp.max_len = len;
-		buf->resp.len     = len;
-		buf->resp.p       = (char *)(buf->resp.msg + 1);
+		buf->resp.msg       = resp;
+		buf->resp.free_fn   = NULL;
+		buf->resp.allocated = len;
+		buf->resp.len       = len;
+		buf->resp.p         = (char *)(buf->resp.msg + 1);
 	}
 
 	responses_left = ods_atomic_dec(&rpc->num_pend);

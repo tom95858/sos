@@ -117,6 +117,9 @@ int main(int ac, char *av[])
 
 static void server_cb(zap_ep_t ep, zap_event_t ev)
 {
+	dsos_msg_t	*msg;
+	dsosd_client_t	*client = (dsosd_client_t *)zap_get_ucontext(ep);
+
 	switch (ev->type) {
 	    case ZAP_EVENT_CONNECT_REQUEST:
 		handle_connect_req(ep);
@@ -134,7 +137,46 @@ static void server_cb(zap_ep_t ep, zap_event_t ev)
 		handle_connect_err(ep);
 		break;
 	    case ZAP_EVENT_RECV_COMPLETE:
-		handle_msg(ep, (dsos_msg_t *)ev->data, ev->data_len);
+		msg = (dsos_msg_t *)ev->data;
+		if (client->msg.allocated) {
+			/*
+			 * Message #2 or later of a multiple-message RPC.
+			 * Concatenate it onto the buffer allocated after
+			 * seeing message #1.
+			 */
+			memcpy(client->msg.p, msg, ev->data_len);
+			client->msg.p         += ev->data_len;
+			client->msg.allocated -= ev->data_len;
+			dsosd_debug("client %p: next msg len %d copied to %p, %d left\n", client,
+				    ev->data_len, client->msg.msg, client->msg.allocated);
+			if (client->msg.allocated <= 0)  {
+				handle_msg(ep, (dsos_msg_t *)client->msg.msg, client->msg.len);
+				if (client->msg.free_fn)
+					client->msg.free_fn(client->msg.msg);
+				client->msg.allocated = 0;
+			}
+		} else if (msg->hdr.flags & DSOS_RPC_FLAGS_MULTIPLE) {
+			/*
+			 * Message #1 of a multiple-message RPC. Allocate a
+			 * buffer to hold the whole thing and arrange for copying the
+			 * received message frames into the buffer.
+			 */
+			client->msg.len       = msg->hdr.len;
+			client->msg.msg       = (dsos_msg_t *)dsosd_malloc(client->msg.len);
+			client->msg.p         = (char *)client->msg.msg;
+			client->msg.allocated = client->msg.len;
+			client->msg.free_fn   = free;
+
+			memcpy(client->msg.p, ev->data, ev->data_len);
+			client->msg.p         += ev->data_len;
+			client->msg.allocated -= ev->data_len;
+			dsosd_debug("client %p: msg #1 len %d of %d copied to %p, %d left\n", client,
+				    ev->data_len, client->msg.len, client->msg.msg, client->msg.allocated);
+			break;
+		} else {
+			/* An RPC that fits within a single message. */
+			handle_msg(ep, msg, ev->data_len);
+		}
 		break;
 	    case ZAP_EVENT_READ_COMPLETE:
 		handle_read_complete(ep, ev->context);
@@ -262,7 +304,6 @@ static void handle_read_complete(zap_ep_t ep, void *ctxt)
 	sos_obj_data_get(obj, &obj_data, &obj_sz);
 	memcpy(obj_data, rpc->rma_buf, obj_sz);
 	mm_free(client->heap, rpc->rma_buf);
-	rpc->rma_buf = NULL;
 #endif
 	*(uint64_t *)obj_data = sos_schema_id(obj->schema);
 
@@ -427,9 +468,14 @@ dsosd_client_t *dsosd_client_new(zap_ep_t ep)
 	if (!client)
 		dsosd_fatal("out of memory");
 
-	client->refcount    = 1;  // start with a reference
-	client->ep          = ep;
-	client->next_handle = 0x1b0b0b0b0ul;
+	client->refcount      = 1;  // start with a reference
+	client->ep            = ep;
+	client->next_handle   = 0x1b0b0b0b0ul;
+	client->msg.msg       = NULL;
+	client->msg.p         = NULL;
+	client->msg.len       = 0;
+	client->msg.allocated = 0;
+	client->msg.free_fn   = NULL;
 
 	pthread_mutex_init(&client->idx_rbt_lock, 0);
 	sem_init(&client->initialized_sem, 0, 0);
@@ -460,22 +506,34 @@ void dsosd_client_get(dsosd_client_t *client)
 	dsosd_debug("%p refcount now %d\n", client, client->refcount);
 }
 
-static int handle_dump_traverse(struct rbn *rbn, void *ctxt, int level)
+static int handle_traverse(struct rbn *rbn, void *ctxt, int level)
 {
-	struct ptr_rbn	*rbn_ptr = (struct ptr_rbn *)rbn;
+	dsosd_handle_type_t	to_close = (dsosd_handle_type_t)ctxt;
+	struct ptr_rbn		*rbn_ptr = (struct ptr_rbn *)rbn;
 
-	dsosd_debug("%s\t%p\n", dsosd_handle_type_str(rbn_ptr->type), rbn_ptr->ptr);
-}
+	if (rbn_ptr->type != to_close)
+		return 0;
 
-static void dump_handles(dsosd_client_t *client)
-{
-	dsosd_debug("client %p handles:\n", client);
-	rbt_traverse(&client->handle_rbt, handle_dump_traverse, NULL);
+	switch (rbn_ptr->type) {
+	    case DSOSD_HANDLE_CONT:
+		dsosd_debug("closing container %p\n", rbn_ptr->ptr);
+		sos_container_close((sos_t)rbn_ptr->ptr, SOS_COMMIT_SYNC);
+		break;
+	    case DSOSD_HANDLE_ITER:
+		dsosd_debug("closing iterator %p\n", rbn_ptr->ptr);
+		sos_iter_free((sos_iter_t)rbn_ptr->ptr);
+		break;
+	    case DSOSD_HANDLE_PART:
+	    case DSOSD_HANDLE_SCHEMA:
+	    case DSOSD_HANDLE_FILTER:
+	    case DSOSD_HANDLE_INDEX:
+		break;
+	}
 }
 
 void dsosd_client_put(dsosd_client_t *client)
 {
-	struct ptr_rbn	*rbn;
+	struct rbn	*rbn;
 
 	dsosd_debug("%p refcount was %d\n", client, client->refcount);
 	if (!ods_atomic_dec(&client->refcount)) {
@@ -486,16 +544,19 @@ void dsosd_client_put(dsosd_client_t *client)
 		if (client->heap_buf)
 			free(client->heap_buf);
 #endif
-#ifdef DSOSD_DEBUG
-		dump_handles(client);
+
+// sometimes this crashes with what looks like a double index close
+#if 0
+		/* Close all open iterators. */
+		rbt_traverse(&client->handle_rbt, handle_traverse, (void *)DSOSD_HANDLE_ITER);
 #endif
+
 		/* Close all open containers. */
-		while ((rbn = (struct ptr_rbn *)rbt_min(&client->handle_rbt))) {
-			if (rbn->type == DSOSD_HANDLE_CONT) {
-				dsosd_debug("closing container %p\n", rbn->ptr);
-				sos_container_close((sos_t)rbn->ptr, SOS_COMMIT_SYNC);
-			}
-			rbt_del(&client->handle_rbt, (struct rbn *)rbn);
+		rbt_traverse(&client->handle_rbt, handle_traverse, (void *)DSOSD_HANDLE_CONT);
+
+		/* Free the handle rbt. */
+		while (rbn = rbt_min(&client->handle_rbt)) {
+			rbt_del(&client->handle_rbt, rbn);
 			free(rbn);
 		}
 		free(client);

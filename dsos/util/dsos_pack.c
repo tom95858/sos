@@ -62,16 +62,45 @@ const char *dsos_rpc_type_to_str(int type)
 	}
 }
 
+static int handle_overflow(dsos_buf_t *buf, int len)
+{
+	int	need;
+	char	*newbuf;
+
+	if (buf->p == NULL)
+		return 1;
+
+	if ((buf->len + len) <= buf->allocated)
+		return 0;
+
+	need = buf->len + len;
+	while (buf->allocated < need)
+		buf->allocated *= 2;
+
+	newbuf = malloc(buf->allocated);
+	if (!newbuf) {
+		buf->p = NULL;
+		return 1;
+	}
+
+	memcpy(newbuf, buf->msg, buf->len);
+	if (buf->free_fn)
+		buf->free_fn(buf->msg);
+
+	buf->msg     = (dsos_msg_t *)newbuf;
+	buf->p       = (char *)buf->msg + buf->len;
+	buf->free_fn = free;
+
+	return 0;
+}
+
 int dsos_pack_u32(dsos_buf_t *buf, uint32_t val)
 {
 	size_t	len = sizeof(uint32_t);
 
-	if (buf->p == NULL)
+	if (handle_overflow(buf, len))
 		return 1;
-	if ((buf->len + len) > buf->max_len) {
-		buf->p = NULL;
-		return 1;
-	}
+
 	*(uint32_t *)buf->p = val;
 	buf->p   += len;
 	buf->len += len;
@@ -91,12 +120,9 @@ int dsos_pack_u64(dsos_buf_t *buf, uint64_t val)
 {
 	size_t	len = sizeof(uint64_t);
 
-	if (buf->p == NULL)
+	if (handle_overflow(buf, len))
 		return 1;
-	if ((buf->p + len) > ((char *)buf->msg + buf->max_len)) {
-		buf->p = NULL;
-		return 1;
-	}
+
 	*(uint64_t *)buf->p = val;
 	buf->p   += len;
 	buf->len += len;
@@ -112,19 +138,13 @@ uint64_t dsos_unpack_u64(dsos_buf_t *buf)
 
 int dsos_pack_str(dsos_buf_t *buf, const char *str)
 {
-	size_t	len;
-	int	pack_len;
+	size_t	len = 0;
 
-	if (buf->p == NULL)
-		return 1;
-	len = 0;
 	if (str)
 		len = strlen(str) + 1;
-	pack_len = len + sizeof(uint32_t);
-	if ((buf->p + pack_len) > ((char *)buf->msg + buf->max_len)) {
-		buf->p = NULL;
+
+	if (handle_overflow(buf, len + sizeof(uint32_t)))
 		return 1;
-	}
 
 	dsos_pack_u32(buf, len);
 	if (str)
@@ -153,14 +173,9 @@ char *dsos_unpack_str(dsos_buf_t *buf)
 
 int dsos_pack_buf(dsos_buf_t *buf, void *ptr, int len)
 {
-	int	pack_len = len + sizeof(uint32_t);
+	if (handle_overflow(buf, len + sizeof(uint32_t)))
+		return 1;
 
-	if (buf->p == NULL)
-		return 1;
-	if ((buf->p + pack_len) > ((char *)buf->msg + buf->max_len)) {
-		buf->p = NULL;
-		return 1;
-	}
 	dsos_pack_u32(buf, len);
 	if (len)
 		memcpy(buf->p, ptr, len);
@@ -202,7 +217,7 @@ void *dsos_unpack_buf(dsos_buf_t *buf, int *plen)
 
 int dsos_pack_fits(dsos_buf_t *buf, int len)
 {
-	return (buf->p + len) <= ((char *)buf->msg + buf->max_len);
+	return (buf->p + len) <= ((char *)buf->msg + buf->allocated);
 }
 
 int dsos_pack_obj_needs(sos_obj_t obj)
@@ -218,18 +233,12 @@ int dsos_pack_obj_needs(sos_obj_t obj)
 int dsos_pack_obj(dsos_buf_t *buf, sos_obj_t obj)
 {
 	char		*obj_data;
-	size_t		obj_sz, pack_len;
-
-	if (buf->p == NULL)
-		return 1;
+	size_t		obj_sz;
 
 	sos_obj_data_get(obj, &obj_data, &obj_sz);
 
-	pack_len = obj_sz + sizeof(uint32_t);
-	if ((buf->p + pack_len) > ((char *)buf->msg + buf->max_len)) {
-		buf->p = NULL;
+	if (handle_overflow(buf, obj_sz + sizeof(uint32_t)))
 		return 1;
-	}
 
 	dsos_pack_buf(buf, obj_data, obj_sz);
 	return 0;
@@ -245,7 +254,7 @@ int dsos_unpack_obj(dsos_buf_t *buf, sos_obj_t obj)
 
 	msg_data = dsos_unpack_buf(buf, &len);
 
-	if ((len > obj_sz) | (len > buf->max_len))
+	if ((len > obj_sz) || (len > buf->allocated))
 		return 1;
 
 	memcpy(obj_data, msg_data, len);
@@ -323,15 +332,9 @@ int dsos_pack_schema(dsos_buf_t *buf, sos_schema_t schema)
 	sos_attr_t		attr, join_attr;
 	sos_schema_data_t	data = schema->data;
 
-#if 0
-	char *start = buf->p;
-	printf("Bo: packing %s at offset %d, %d available\n",
-	       schema->data->name, buf->p - (char *)buf->msg, buf->max_len - buf->len);
-#endif
 	ret  = dsos_pack_str(buf, schema->data->name);
 	ret |= dsos_pack_u32(buf, schema->data->attr_cnt);
 	TAILQ_FOREACH(attr, &schema->attr_list, entry) {
-//		printf("Bo: new attr: buf->p %p, %d available\n", buf->p, buf->max_len - buf->len);
 		ret |= dsos_pack_str(buf, attr->data->name);
 		ret |= dsos_pack_u32(buf, attr->data->type);
 		if (attr->data->el_sz)
@@ -340,13 +343,11 @@ int dsos_pack_schema(dsos_buf_t *buf, sos_schema_t schema)
 			ret |= dsos_pack_u32(buf, attr->data->size);
 		if (attr->ext_ptr) {
 			ret |= dsos_pack_u32(buf, attr->ext_ptr->count);
-//			printf("Bo: join attr: buf->p %p, %d available\n", buf->p, buf->max_len - buf->len);
 			for (i = 0; i < attr->ext_ptr->count; ++i) {
 				join_attr = sos_schema_attr_by_id(schema,
 								  attr->ext_ptr->data.uint32_[i]);
 				ret |= dsos_pack_str(buf, sos_attr_name(join_attr));
 			}
-//			printf("Bo: join attr done: buf->p %p, %d available\n", buf->p, buf->max_len - buf->len);
 		} else {
 			ret |= dsos_pack_u32(buf, 0);
 		}
@@ -355,7 +356,6 @@ int dsos_pack_schema(dsos_buf_t *buf, sos_schema_t schema)
 		ret |= dsos_pack_str(buf, attr->key_type);
 		ret |= dsos_pack_str(buf, attr->idx_args);
 	}
-//	printf("Bo: done packing %s ret %d buf->p %p len %d\n", schema->data->name, ret, buf->p, buf->p - start);
 	return ret;
 }
 
@@ -370,11 +370,8 @@ sos_schema_t dsos_unpack_schema(dsos_buf_t *buf)
 	name      = dsos_unpack_str(buf);
 	num_attrs = dsos_unpack_u32(buf);
 
-	t = (sos_schema_template_t)malloc(sizeof(struct sos_schema_template) +
-					  sizeof(struct sos_schema_template_attr) * (num_attrs+1));
-	if (!t)
-		return NULL;
-
+	t = (sos_schema_template_t)dsos_malloc(sizeof(struct sos_schema_template) +
+					       sizeof(struct sos_schema_template_attr) * (num_attrs+1));
 	t->name = name;
 	for (i = 0; i < num_attrs; ++i) {
 		t->attrs[i].name = dsos_unpack_str(buf);
@@ -383,13 +380,10 @@ sos_schema_t dsos_unpack_schema(dsos_buf_t *buf)
 		num_join_attrs   = dsos_unpack_u32(buf);
 		t->attrs[i].join_list = NULL;
 		if (num_join_attrs) {
-			t->attrs[i].join_list = malloc(sizeof(char *) * num_join_attrs);
-			if (!t->attrs[i].join_list) {
-				free(t);
-				return NULL;
-			}
+			t->attrs[i].join_list = dsos_malloc(sizeof(char *) * num_join_attrs);
 			for (j = 0; j < num_join_attrs; ++j)
 				t->attrs[i].join_list[j] = dsos_unpack_str(buf);
+			t->attrs[i].size = num_join_attrs;
 		}
 		t->attrs[i].indexed  = dsos_unpack_u32(buf);
 		t->attrs[i].idx_type = dsos_unpack_str(buf);
@@ -414,8 +408,8 @@ void dsos_buf_dump(FILE *f, dsos_buf_t *buf, const char *str)
 	int	i;
 	uint8_t	*p = (uint8_t *)buf->msg;
 
-	fprintf(f, "%s buf %p: msg %p len %d max_len %d p %p free %p\n",
-		str, buf, buf->msg, buf->len, buf->max_len, buf->p, buf->free_fn);
+	fprintf(f, "%s buf %p: msg %p len %d allocated %d p %p free %p\n",
+		str, buf, buf->msg, buf->len, buf->allocated, buf->p, buf->free_fn);
 
 	for (i = 0; i < buf->len; ++i) {
 		if (i && ((i % 16) == 0))

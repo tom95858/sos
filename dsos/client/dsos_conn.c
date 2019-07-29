@@ -13,6 +13,7 @@
 
 static void client_cb(zap_ep_t ep, zap_event_t ev)
 {
+	dsos_msg_t	*msg;
 	dsos_conn_t	*conn = (dsos_conn_t *)zap_get_ucontext(ep);
 
 	switch (ev->type) {
@@ -46,7 +47,45 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 		sem_post(&conn->conn_sem);
 		break;
 	    case ZAP_EVENT_RECV_COMPLETE:
-		dsos_rpc_handle_resp(conn, (dsos_msg_t *)ev->data, ev->data_len);
+		msg = (dsos_msg_t *)ev->data;
+		if (conn->msg.allocated) {
+			/*
+			 * Message #2 or later of a multiple-message RPC.
+			 * Concatenate it onto the buffer allocated after
+			 * seeing message #1.
+			 */
+			memcpy(conn->msg.p, msg, ev->data_len);
+			conn->msg.p         += ev->data_len;
+			conn->msg.allocated -= ev->data_len;
+			dsos_debug("server %d: next msg len %d copied to %p, %d left\n", conn->server_id,
+				    ev->data_len, conn->msg.msg, conn->msg.allocated);
+			if (conn->msg.allocated <= 0)  {
+				dsos_rpc_handle_resp(conn, (dsos_msg_t *)conn->msg.msg, conn->msg.len);
+				if (conn->msg.free_fn)
+					conn->msg.free_fn(conn->msg.msg);
+				conn->msg.allocated = 0;
+			}
+		} else if (msg->hdr.flags & DSOS_RPC_FLAGS_MULTIPLE) {
+			/*
+			 * Message #1 of a multiple-message RPC. Allocate a
+			 * buffer to hold the whole thing and arrange for copying the
+			 * received message frames into the buffer.
+			 */
+			conn->msg.len       = msg->hdr.len;
+			conn->msg.msg       = (dsos_msg_t *)dsos_malloc(conn->msg.len);
+			conn->msg.p         = (char *)conn->msg.msg;
+			conn->msg.allocated = conn->msg.len;
+			conn->msg.free_fn   = free;
+
+			memcpy(conn->msg.p, ev->data, ev->data_len);
+			conn->msg.p         += ev->data_len;
+			conn->msg.allocated -= ev->data_len;
+			dsos_debug("server %d: msg #1 len %d of %d copied to %p, %d left\n", conn->server_id,
+				   ev->data_len, conn->msg.len, conn->msg.msg, conn->msg.allocated);
+			break;
+		} else {
+			dsos_rpc_handle_resp(conn, msg, ev->data_len);
+		}
 		break;
 	    case ZAP_EVENT_READ_COMPLETE:
 	    case ZAP_EVENT_WRITE_COMPLETE:

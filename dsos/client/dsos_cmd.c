@@ -25,6 +25,8 @@ int			do_delete(int ac, char *av[]);
 void			dump_obj(sos_obj_t sos_obj);
 void			dump_schema(sos_schema_t sos_schema);
 sos_schema_template_t	parse_schema_template(const char *schema_nm, char *template);
+void			print_elapsed(int num_iters_interval, int num_iters_tot,
+				      struct timespec beg, struct timespec last);
 
 void usage(void)
 {
@@ -247,6 +249,7 @@ static void obj_cb(sos_obj_t obj, void *ctxt)
 int do_import(int ac, char *av[])
 {
 	int		bufsz, c, i, num_objs, ret;
+	int		progress = 0;
 	FILE		*fp;
 	char		*cont_nm = NULL, *schema_nm = NULL, *buf, *tok;
 	dsos_t		*cont;
@@ -254,10 +257,12 @@ int do_import(int ac, char *av[])
 	sos_obj_t	obj;
 	sos_attr_t	attr;
 	sem_t		sem;
+	struct timespec	beg, end, last;
 
 	struct option	lopts[] = {
 		{ "cont",	required_argument, NULL, 'c' },
 		{ "schema",	required_argument, NULL, 's' },
+		{ "progress",   no_argument,       NULL, 'g' },
 		{ "verbose",	no_argument,       NULL, 'v' },
 		{ 0,		0,		   0,     0  }
 	};
@@ -266,12 +271,14 @@ int do_import(int ac, char *av[])
 		switch (c) {
 		    case 'c': cont_nm   = strdup(optarg); break;
 		    case 's': schema_nm = strdup(optarg); break;
+		    case 'g': progress = 1; break;
 		    case 'v': import_verbose = 1; break;
 		    default:
 			usage();
 			fprintf(stderr, "options:\n");
 			fprintf(stderr, "  --cont <path>      Container path\n");
 			fprintf(stderr, "  --schema <name>    Schema name\n");
+			fprintf(stderr, "  --progress\n");
 			fprintf(stderr, "  --verbose\n");
 			return 1;
 		}
@@ -309,6 +316,8 @@ int do_import(int ac, char *av[])
 	}
 	sem_init(&sem, 0, 0);
 	num_objs = 0;
+	clock_gettime(CLOCK_REALTIME, &beg);
+	clock_gettime(CLOCK_REALTIME, &last);
 	while (fgets(buf, bufsz, fp)) {
 		if (buf[strlen(buf)-1] == '\n')
 			buf[strlen(buf)-1] = 0;  // chomp
@@ -336,6 +345,10 @@ int do_import(int ac, char *av[])
 		}
 		sos_obj_put(obj);
 		++num_objs;
+		if (progress && num_objs && ((num_objs % 10000) == 0)) {
+			print_elapsed(1000, num_objs, beg, last);
+			clock_gettime(CLOCK_REALTIME, &last);
+		}
 	}
 	free(buf);
 	fclose(fp);
@@ -343,6 +356,8 @@ int do_import(int ac, char *av[])
 	// Wait until all object-creation callbacks have occurred.
 	for (i = 0; i < num_objs; ++i)
 		sem_wait(&sem);
+
+	print_elapsed(10000, num_objs, beg, last);
 
 	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	return 0;
@@ -863,4 +878,44 @@ void dump_obj(sos_obj_t sos_obj)
 	printf("\n");
 
 	free(buf);
+}
+
+void print_elapsed(int num_iters_interval, int num_iters_tot,
+		   struct timespec beg, struct timespec last)
+{
+	struct timespec	cur, elapsed_interval, elapsed_tot;
+	uint64_t	nsecs_interval, nsecs_tot;
+
+	clock_gettime(CLOCK_REALTIME, &cur);
+
+	if ((cur.tv_nsec - last.tv_nsec) < 0) {
+		elapsed_interval.tv_sec  = cur.tv_sec - last.tv_sec-1;
+		elapsed_interval.tv_nsec = 1000000000 + cur.tv_nsec - last.tv_nsec;
+	} else {
+		elapsed_interval.tv_sec  = cur.tv_sec  - last.tv_sec;
+		elapsed_interval.tv_nsec = cur.tv_nsec - last.tv_nsec;
+	}
+	nsecs_interval = elapsed_interval.tv_sec * 1000000000 + elapsed_interval.tv_nsec;
+
+	if ((cur.tv_nsec - beg.tv_nsec) < 0) {
+		elapsed_tot.tv_sec  = cur.tv_sec - beg.tv_sec-1;
+		elapsed_tot.tv_nsec = 1000000000 + cur.tv_nsec - beg.tv_nsec;
+	} else {
+		elapsed_tot.tv_sec  = cur.tv_sec  - beg.tv_sec;
+		elapsed_tot.tv_nsec = cur.tv_nsec - beg.tv_nsec;
+	}
+	nsecs_tot = elapsed_tot.tv_sec * 1000000000 + elapsed_tot.tv_nsec;
+
+	printf("[%5d] %8d: %.0f objs/sec %.1f usecs/obj (this interval), %0.f objs/sec %.1f usecs/obj (cum), %.6f secs\n",
+	       getpid(),
+	       num_iters_tot,
+
+	       num_iters_interval/(nsecs_interval/1000000000.0),
+	       (nsecs_interval/1000.0)/num_iters_interval,
+
+	       num_iters_tot/(nsecs_tot/1000000000.0),
+	       (nsecs_tot/1000.0)/num_iters_tot,
+
+	       nsecs_tot/1000000000.0);
+	fflush(stdout);
 }
