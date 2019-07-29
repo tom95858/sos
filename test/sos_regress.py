@@ -23,6 +23,7 @@ from join_test_u32_str_u32 import JoinTestU32_Str_U32
 from join_test_u32_str_str import JoinTestU32_Str_Str
 from join_test_key import JoinTestKey
 from join_test_getter import JoinTestGet
+from join_test_value_cmp import JoinTestValueCmp
 from filter_test import FilterTest
 from test_filt_join_cond import FilterJoinCond
 from test_gui_filt import GuiFilter

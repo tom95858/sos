@@ -4415,6 +4415,30 @@ cdef class Value(object):
             sos_obj_put(self.c_obj)
             self.c_obj = NULL
 
+    def __gt__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) > 0
+
+    def __lt__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) < 0
+
+    def __ge__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) >= 0
+
+    def __le__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) <= 0
+
+    def __eq__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) == 0
+
+    def __ne__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) != 0
+
 cdef class Object(object):
     """
     The Object encapsulates the SOS container object in memory.
