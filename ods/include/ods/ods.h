@@ -481,6 +481,8 @@ extern void ods_dump(ods_t ods, FILE *fp);
  * the function wishes to cancel iteration, return !0, otherwise,
  * return 0.
  *
+ * The callback function owns the reference to the provided object.
+ *
  * \param ods	The ODS handle
  * \param obj	The object handle
  * \param sz	The size of the object

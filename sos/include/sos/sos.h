@@ -431,6 +431,8 @@ int64_t sos_part_index(sos_part_t src_part);
  * the function wishes to cancel iteration, return !0, otherwise,
  * return 0.
  *
+ * This callback function owns a reference on the provided object.
+ *
  * \param sos	The container handle
  * \param obj	The object handle
  * \param sz	The size of the object

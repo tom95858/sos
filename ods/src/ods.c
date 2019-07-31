@@ -2296,7 +2296,6 @@ int ods_obj_iter(ods_t ods, ods_obj_iter_pos_t pos,
 					continue;
 				obj = ods_ref_as_obj(ods, (pg_no << ODS_PAGE_SHIFT) | (blk * sz));
 				rc = iter_fn(ods, obj, arg);
-				ods_obj_put(obj);
 				if (rc)
 					goto out;
 			}
@@ -2305,7 +2304,6 @@ int ods_obj_iter(ods_t ods, ods_obj_iter_pos_t pos,
 			blk = 0;
 			obj = ods_ref_as_obj(ods, pg_no << ODS_PAGE_SHIFT);
 			rc = iter_fn(ods, obj, arg);
-			ods_obj_put(obj);
 			pg_no += pg->pg_count;
 			if (rc)
 				goto out;
