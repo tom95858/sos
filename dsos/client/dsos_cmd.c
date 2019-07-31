@@ -20,6 +20,7 @@ int			do_schema(int ac, char *av[]);
 int			do_import(int ac, char *av[]);
 int			do_iter(int ac, char *av[]);
 int			do_find(int ac, char *av[]);
+int			do_migrate(int ac, char *av[]);
 int			do_ping(int ac, char *av[]);
 int			do_delete(int ac, char *av[]);
 void			dump_obj(sos_obj_t sos_obj);
@@ -27,6 +28,7 @@ void			dump_schema(sos_schema_t sos_schema);
 sos_schema_template_t	parse_schema_template(const char *schema_nm, char *template);
 void			print_elapsed(int num_iters_interval, int num_iters_tot,
 				      struct timespec beg, struct timespec last);
+static struct rbt	migrate_rbt;
 
 void usage(void)
 {
@@ -60,13 +62,14 @@ int main(int ac, char *av[])
 		fprintf(stderr, "must set $DSOS_CONFIG\n");
 		return 1;
 	}
-	if      (!strcmp(av[1], "cont"))   ret = do_cont  (ac-1, av+1);
-	else if (!strcmp(av[1], "schema")) ret = do_schema(ac-1, av+1);
-	else if (!strcmp(av[1], "find"))   ret = do_find  (ac-1, av+1);
-	else if (!strcmp(av[1], "iter"))   ret = do_iter  (ac-1, av+1);
-	else if (!strcmp(av[1], "delete")) ret = do_delete(ac-1, av+1);
-	else if (!strcmp(av[1], "import")) ret = do_import(ac-1, av+1);
-	else if (!strcmp(av[1], "ping"))   ret = do_ping  (ac-1, av+1);
+	if      (!strcmp(av[1], "cont"))    ret = do_cont  (ac-1, av+1);
+	else if (!strcmp(av[1], "schema"))  ret = do_schema(ac-1, av+1);
+	else if (!strcmp(av[1], "find"))    ret = do_find  (ac-1, av+1);
+	else if (!strcmp(av[1], "iter"))    ret = do_iter  (ac-1, av+1);
+	else if (!strcmp(av[1], "delete"))  ret = do_delete(ac-1, av+1);
+	else if (!strcmp(av[1], "import"))  ret = do_import(ac-1, av+1);
+	else if (!strcmp(av[1], "migrate")) ret = do_migrate(ac-1, av+1);
+	else if (!strcmp(av[1], "ping"))    ret = do_ping  (ac-1, av+1);
 	else {
 		usage();
 		ret = 1;
@@ -357,7 +360,7 @@ int do_import(int ac, char *av[])
 	for (i = 0; i < num_objs; ++i)
 		sem_wait(&sem);
 
-	print_elapsed(10000, num_objs, beg, last);
+	print_elapsed(1000, num_objs, beg, last);
 
 	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	return 0;
@@ -693,6 +696,252 @@ int do_ping(int ac, char *av[])
 		if (i != (num_iters-1))
 			nanosleep(&sleep_ts, NULL);
 	}
+
+	return 0;
+}
+
+/* For RBT that maps schema name -> DSOS schema. */
+struct migrate_rbn {
+	struct rbn	rbn;
+	sos_schema_t	dsos_schema;
+};
+
+/* This is used as the context argument for migrate_cb. */
+struct migrate_ctxt_s {
+	sem_t		*sem;
+	int		num_objs;
+	int		max_objs;
+	int		verbose;
+	int		progress;
+	struct timespec	ts_beg;
+	struct timespec	ts_last;
+};
+
+static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int migrate_rbn_cmp_fn(void *tree_key, void *key)
+{
+	return strcmp(tree_key, key);
+}
+
+static void migrate_schema_add(const char *schema_nm, sos_schema_t dsos_schema)
+{
+	struct migrate_rbn *rbn = (struct migrate_rbn *)rbt_find(&migrate_rbt, (void *)schema_nm);
+	if (!rbn) {
+		rbn = calloc(1, sizeof(*rbn));
+		if (!rbn) return;
+		rbn->rbn.key     = strdup(schema_nm);
+		rbn->dsos_schema = dsos_schema;
+		rbt_ins(&migrate_rbt, (struct rbn *)rbn);
+	} else {
+		printf("schema %s already exists\n", schema_nm);
+	}
+}
+
+static sos_schema_t migrate_schema_map(const char *schema_nm)
+{
+	struct migrate_rbn *rbn = (struct migrate_rbn *)rbt_find(&migrate_rbt, (void *)schema_nm);
+	assert(rbn);
+	return rbn->dsos_schema;
+}
+
+static void dsos_cb(sos_obj_t dsos_obj, void *ctxt)
+{
+	struct migrate_ctxt_s	*args = ctxt;
+
+	if (args->verbose) {
+		pthread_mutex_lock(&log_lock);
+		printf("DSOS obj %p created %d:%d\n",
+		       dsos_obj,
+		       dsos_obj->obj_ref.ref.ods, dsos_obj->obj_ref.ref.obj);
+		pthread_mutex_unlock(&log_lock);
+	}
+
+	sem_post(args->sem);
+	sos_obj_put(dsos_obj);
+}
+
+static int migrate_cb(sos_part_t part, sos_obj_t sos_obj, void *ctxt)
+{
+	sos_obj_t		dsos_obj;
+	sos_schema_t		sos_schema, dsos_schema;
+	struct migrate_ctxt_s	*args = ctxt;
+
+	sos_schema = sos_obj_schema(sos_obj);
+	dsos_schema = migrate_schema_map(sos_schema_name(sos_schema));
+
+	++args->num_objs;
+
+	dsos_obj = dsos_obj_alloc(dsos_schema);
+	if (!dsos_obj) {
+		printf("out of memory\n");
+		return 1;
+	}
+
+	if (args->verbose) {
+		pthread_mutex_lock(&log_lock);
+		printf("SOS obj %p %d:%d -> DSOS obj %p\n",
+		       sos_obj,
+		       sos_obj_ref(sos_obj).ref.ods,
+		       sos_obj_ref(sos_obj).ref.obj,
+		       dsos_obj);
+		pthread_mutex_unlock(&log_lock);
+	}
+	if (args->progress && ((args->num_objs % 1000) == 0)) {
+		print_elapsed(1000, args->num_objs, args->ts_beg, args->ts_last);
+		clock_gettime(CLOCK_REALTIME, &args->ts_last);
+	}
+
+	sos_obj_copy(dsos_obj, sos_obj);
+	dsos_obj_create(dsos_obj, dsos_cb, ctxt);
+
+	sos_obj_put(sos_obj);
+
+	if (args->max_objs != -1)
+		return (args->num_objs >= args->max_objs);
+	return 0;  // keep going
+}
+
+/*
+ * dsos_cmd migrate --sos-cont /tmp/cont.sos --dsos-cont /tmp/cont.dsos [--schema schema_to_copy]
+ */
+int do_migrate(int ac, char *av[])
+{
+	int		c, i, num_objs, ret;
+	int		progress = 0, verbose = 0, max_objs = -1;
+	char		*dsos_cont_nm = NULL, *sos_cont_nm = NULL, *schema_nm = NULL;
+	dsos_t		*dsos_cont;
+	dsos_part_t	*part;
+	sos_t		sos_cont;
+	sos_schema_t	sos_schema, dsos_schema;
+	sos_obj_t	obj;
+	sos_iter_t	sos_iter;
+	sos_attr_t	attr;
+	sem_t		sem;
+	struct migrate_ctxt_s ctxt;
+
+	struct option	lopts[] = {
+		{ "dsos-cont",	required_argument, NULL, 'd' },
+		{ "sos-cont",	required_argument, NULL, 'c' },
+		{ "num",        required_argument, NULL, 'n' },
+		{ "schema",	required_argument, NULL, 's' },
+		{ "progress",   no_argument,       NULL, 'g' },
+		{ "verbose",	no_argument,       NULL, 'v' },
+		{ 0,		0,		   0,     0  }
+	};
+
+	while ((c = getopt_long_only(ac, av, "c:dg:s:v", lopts, NULL)) != -1) {
+		switch (c) {
+		    case 'c': sos_cont_nm  = strdup(optarg); break;
+		    case 'd': dsos_cont_nm = strdup(optarg); break;
+		    case 's': schema_nm    = strdup(optarg); break;
+		    case 'n': max_objs = atoi(optarg); break;
+		    case 'g': progress = 1; break;
+		    case 'v': verbose  = 1; break;
+		    default:
+			usage();
+			fprintf(stderr, "options:\n");
+			fprintf(stderr, "  --sos-cont <path>    SOS container path to read\n");
+			fprintf(stderr, "  --dsos-cont <path>   DSOS container path to create\n");
+			fprintf(stderr, "  --schema <name>      optional: schema to migrate\n");
+			fprintf(stderr, "  --num <max_objs>     optional: max # objects to migrate\n");
+			fprintf(stderr, "  --progress\n");
+			fprintf(stderr, "  --verbose\n");
+			return 1;
+		}
+	}
+	if (!sos_cont_nm || !dsos_cont_nm) {
+		fprintf(stderr, "must specify --sos-cont and --dsos-cont\n");
+		return 1;
+	}
+
+	rbt_init(&migrate_rbt, migrate_rbn_cmp_fn);
+
+	/* SOS init */
+	sos_cont = sos_container_open(sos_cont_nm, 0644);
+	if (!sos_cont) {
+		perror("could not open SOS container\n");
+		return 1;
+	}
+
+	/* DSOS init */
+	ret = dsos_container_new(dsos_cont_nm, 0755);
+	if (ret) {
+		dsos_perror("could not create container\n");
+		exit(1);
+	}
+	dsos_cont = dsos_container_open(dsos_cont_nm, 0644);
+	if (!dsos_cont) {
+		dsos_perror("could not open container\n");
+		exit(1);
+	}
+	ret = dsos_part_create(dsos_cont, "ROOT", NULL);
+	if (ret) {
+		dsos_perror("coult not create partition\n");
+		exit(1);
+	}
+	part = dsos_part_find(dsos_cont, "ROOT");
+	if (!part) {
+		dsos_perror("coult not find partition\n");
+		exit(1);
+	}
+	ret = dsos_part_state_set(part, SOS_PART_STATE_PRIMARY);
+	if (ret) {
+		dsos_perror("coult not set partition state\n");
+		exit(1);
+	}
+
+	/*
+	 * Iterate through schema in the SOS container and create
+	 * the schema in DSOS, keeping a map from schema name to
+	 * the DSOS sos_schema_t. This is needed in the migrate_cb
+	 * iterator callback to get the DSOS schema which is needed
+	 * to create the DSOS object. Note that we cannot simply
+	 * use the SOS sos_schema_t because, although the two schema
+	 * are identical, the DSOS sos_schemat contains DSOS-specific
+	 * internal state needed to create a DSOS object.
+	 */
+	for (sos_schema = sos_schema_first(sos_cont);
+	     sos_schema;
+	     sos_schema = sos_schema_next(sos_schema)) {
+		const char *sos_schema_nm = sos_schema_name(sos_schema);
+		if (schema_nm && strcmp(sos_schema_nm, schema_nm))
+			continue;
+		ret = dsos_schema_add(dsos_cont, sos_schema);
+		if (ret) {
+			dsos_perror("error migrating schema %s to DSOS\n", schema_nm);
+			return 1;
+		}
+		dsos_schema = dsos_schema_by_name(dsos_cont, schema_nm);
+		assert(dsos_schema);
+		migrate_schema_add(sos_schema_nm, dsos_schema);
+		if (verbose)
+			printf("migrated schema %s\n", sos_schema_nm);
+	}
+
+	if (verbose)
+		printf("begin iteration\n");
+	sem_init(&sem, 0, 0);
+	ctxt.sem      = &sem;
+	ctxt.num_objs = 0;
+	ctxt.max_objs = max_objs;
+	ctxt.verbose  = verbose;
+	ctxt.progress = progress;
+	clock_gettime(CLOCK_REALTIME, &ctxt.ts_beg);
+	clock_gettime(CLOCK_REALTIME, &ctxt.ts_last);
+	sos_part_obj_iter(__sos_primary_obj_part(sos_cont), NULL, migrate_cb, &ctxt);
+
+	// Wait until all object-creation callbacks have occurred.
+	if (verbose)
+		printf("end iteration. waiting for all callbacks. %d objects.\n", ctxt.num_objs);
+	for (i = 0; i < ctxt.num_objs; ++i)
+		sem_wait(&sem);
+	if (progress) {
+		clock_gettime(CLOCK_REALTIME, &ctxt.ts_last);
+		print_elapsed(1000, ctxt.num_objs, ctxt.ts_beg, ctxt.ts_last);
+	}
+	if (verbose)
+		printf("all callbacks complete.\n");
 
 	return 0;
 }
