@@ -937,13 +937,13 @@ ods_obj_t ods_obj_get(ods_obj_t obj)
  */
 void __ods_obj_put(ods_obj_t obj, int lock)
 {
+	assert(!obj || obj->refcount > 0);
 	if (obj && !ods_atomic_dec(&obj->refcount)) {
 		if (!obj->ods) {
 			/* This is a memory object */
 			__free_fn(obj);
 			return;
 		}
-		assert(obj->refcount == 0);
 		if (__ods_debug) {
 			if (lock)
 				__ods_lock(obj->ods);
@@ -2271,7 +2271,6 @@ int ods_obj_iter(ods_t ods, ods_obj_iter_pos_t pos,
 					continue;
 				obj = ods_ref_as_obj(ods, (pg_no << ODS_PAGE_SHIFT) | (blk * sz));
 				rc = iter_fn(ods, obj, arg);
-				ods_obj_put(obj);
 				if (rc)
 					goto out;
 			}
@@ -2280,7 +2279,6 @@ int ods_obj_iter(ods_t ods, ods_obj_iter_pos_t pos,
 			blk = 0;
 			obj = ods_ref_as_obj(ods, pg_no << ODS_PAGE_SHIFT);
 			rc = iter_fn(ods, obj, arg);
-			ods_obj_put(obj);
 			pg_no += pg->pg_count;
 			if (rc)
 				goto out;

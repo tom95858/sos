@@ -1612,6 +1612,7 @@ sos_obj_t sos_obj_get(sos_obj_t obj)
  */
 void sos_obj_put(sos_obj_t obj)
 {
+	assert(!obj || obj->ref_count > 0);
 	if (obj && !ods_atomic_dec(&obj->ref_count)) {
 		sos_t sos = obj->sos;
 		if (!sos) {
