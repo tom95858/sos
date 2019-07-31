@@ -60,6 +60,7 @@ int dsos_init(const char *config_filename)
 		return DSOS_ERR_LOCAL;
 	}
 
+	dsos_debug("connecting to %d servers\n", g.num_servers);
 	dsos_err_clear(dsos_errno);
 	for (i = 0; i < g.num_servers; ++i) {
 		ret = dsos_connect(g.conns[i].host, g.conns[i].service, g.conns[i].server_id, 0);
@@ -101,23 +102,18 @@ int dsos_init(const char *config_filename)
 	ods_obj_allocator_set(shared_heap_alloc, shared_heap_free);
 
 	dsos_err_clear(dsos_errno);
+	zerr = zap_map(g.conns[0].ep, &g.map, g.heap_buf, g.opts.heap_sz, ZAP_ACCESS_READ);
+	if (zerr)
+		dsos_fatal("srv %d: err %d (%s) mapping shared heap %p sz %d\n",
+			   i, zerr, zap_err_str(zerr), g.heap_buf, g.opts.heap_sz);
+	dsos_debug("shared heap %p/%d has map %p\n", g.heap_buf, g.opts.heap_sz, g.map);
 	for (i = 0; i < g.num_servers; ++i) {
-		conn = &g.conns[i];
-		zerr = zap_map(conn->ep, &conn->map, g.heap_buf, g.opts.heap_sz, ZAP_ACCESS_READ);
+		zerr = zap_share(g.conns[i].ep, g.map, NULL, 0);
 		if (zerr) {
-			dsos_error("srv %d: err %d (%s) mapping shared heap %p sz %d\n",
-				   i, zerr, zap_err_str(zerr), g.heap_buf, g.opts.heap_sz);
+			dsos_error("srv %d: err %d (%s) sharing heap map %p\n", i, g.map);
 			dsos_err_set_local(dsos_errno, i, zerr);
 			continue;
 		}
-		zerr = zap_share(conn->ep, conn->map, NULL, 0);
-		if (zerr) {
-			dsos_error("srv %d: err %d (%s) sharing heap map %p\n", i, conn->map);
-			dsos_err_set_local(dsos_errno, i, zerr);
-			continue;
-		}
-		dsos_debug("heap %p/%d has map %p for server %d\n",
-			   g.heap_buf, g.opts.heap_sz, conn->map, i);
 	}
 	if (ret = dsos_err_status(dsos_errno))
 		return ret;

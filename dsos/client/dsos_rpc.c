@@ -127,6 +127,15 @@
  *
  *        DSOS_RPC_PUT
  *
+ * RPCs are flow-controlled using a credit system. Currently up to
+ * four RPCs per server connection can be outstanding. This value
+ * could be easily made into a config parameter. A credit must be
+ * obtained to send an RPC and a credit is reclaimed when an RPC
+ * response is received.  The caller is blocked on
+ * conn->rpc_credit_sem if necessary, until a response has been
+ * received to an earlier RPC to the server. All of this is handled
+ * inside the RPC layer. Just note that dsos_rpc_send() can block.
+ *
  * Each DSOS server destined for the request(s) will send a response
  * message which contains the same 64-bit message ID as the
  * request. In an RPC vector, each request gets a different ID (i.e.,
@@ -352,7 +361,7 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 			   conn->ep, rpc->bufs[i].req.msg, rpc->bufs[i].req.len);
 
 		/* Wait for resources if necessary. */
-		sem_wait(&conn->flow_sem);
+		sem_wait(&conn->rpc_credit_sem);
 
 #ifdef RPC_DEBUG
 		{
@@ -425,7 +434,7 @@ void dsos_rpc_handle_resp(dsos_conn_t *conn, dsos_msg_t *resp, size_t len)
 	rbt_del(&rpc_rbt, (struct rbn *)rbn);
 	pthread_mutex_unlock(&rpc_rbt_lock);
 
-	sem_post(&conn->flow_sem);
+	sem_post(&conn->rpc_credit_sem);
 
 	rpc = rbn->rpc;
 	if (rpc->num_servers == 1)

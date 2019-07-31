@@ -61,6 +61,7 @@ struct globals_s {
 	struct opts_s		opts;              // options
 	dsos_conn_t		*conns;            // array of server connection objects
 	zap_t			zap;               // transport
+	zap_map_t		map;               // map for shared heap
 	mm_region_t		heap;              // heap shared w/servers
 	size_t			heap_sz;           // size of heap
 	char			*heap_buf;         // registered buffer for heap
@@ -174,10 +175,9 @@ typedef struct dsos_conn_s {
 	char			*host;          // server host
 	char			*service;       // server port/service
 	zap_ep_t		ep;             // zap endpoint
-	zap_map_t		map;            // map for client/server shared heap
 	int			conn_status;    // connection error status
 	sem_t			conn_sem;       // connect semaphore
-	sem_t			flow_sem;       // flow-control semaphore
+	sem_t			rpc_credit_sem; // RPC flow-control semaphore
 	dsos_buf_t		msg;            // buf for multi-message RPCs
 } dsos_conn_t;
 

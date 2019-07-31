@@ -114,7 +114,7 @@ int dsos_connect(const char *host, const char *service, int server_id, int wait)
 	if (!conn->ep)
 		return ENOMEM;
 	zap_set_ucontext(conn->ep, conn);
-	sem_init(&conn->flow_sem, 0, SQ_DEPTH);
+	sem_init(&conn->rpc_credit_sem, 0, SQ_DEPTH);
 	conn->server_id = server_id;
 	conn->host      = strdup(host);
 	conn->service   = strdup(service);
@@ -148,9 +148,6 @@ void dsos_disconnect(void)
 	dsos_debug("starting\n");
 	for (i = 0; i < g.num_servers; ++i) {
 		sem_init(&g.conns[i].conn_sem, 0, 0);
-		zerr = zap_unmap(g.conns[i].ep, g.conns[i].map);
-		if (zerr)
-			dsos_error("unmap err %d\n", zerr);
 		ret = zap_close(g.conns[i].ep);
 		if (ret)
 			dsos_error("disconnect err %d\n", ret);
