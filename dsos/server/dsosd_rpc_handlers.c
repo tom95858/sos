@@ -18,7 +18,7 @@ const char *dsosd_handle_type_str(dsosd_handle_type_t type)
 	return handle_type_str[type];
 }
 
-dsos_handle_t dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type_t type)
+dsos_handle_t dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type_t type, dsos_handle_t ctxt)
 {
 	struct ptr_rbn	*rbn;
 	dsosd_client_t	*client = rpc->client;
@@ -30,6 +30,7 @@ dsos_handle_t dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type
 	rbn_init((struct rbn *)rbn, (void *)handle);
 	rbn->ptr  = ptr;
 	rbn->type = type;
+	rbn->ctxt = ctxt;
 	rbt_ins(&client->handle_rbt, (void *)rbn);
 	dsosd_debug("client %p ptr %p assigned handle 0x%lx %s\n",
 		    client, ptr, handle, dsosd_handle_type_str(type));
@@ -37,7 +38,7 @@ dsos_handle_t dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type
 	return handle;
 }
 
-void *dsosd_handle_to_ptr(dsosd_rpc_t *rpc, dsos_handle_t handle, dsosd_handle_type_t want_type)
+void *dsosd_handle_to_ptr(dsosd_rpc_t *rpc, dsos_handle_t handle, dsosd_handle_type_t want_type, dsos_handle_t *pctxt)
 {
 	struct ptr_rbn	*rbn;
 	dsosd_client_t	*client = rpc->client;
@@ -54,15 +55,17 @@ void *dsosd_handle_to_ptr(dsosd_rpc_t *rpc, dsos_handle_t handle, dsosd_handle_t
 			    dsosd_handle_type_str(want_type));
 		return NULL;
 	}
+	if (pctxt)
+		*pctxt = rbn->ctxt;
 	dsosd_debug("client %p handle 0x%lx is ptr %p %s\n",
 		    client, handle, rbn->ptr, dsosd_handle_type_str(rbn->type));
 	return rbn->ptr;
 }
 
-void *dsosd_rpc_unpack_handle_to_ptr(dsosd_rpc_t *rpc, dsosd_handle_type_t want_type)
+void *dsosd_rpc_unpack_handle_to_ptr(dsosd_rpc_t *rpc, dsosd_handle_type_t want_type, dsos_handle_t *pctxt)
 {
 	dsos_handle_t handle = dsosd_rpc_unpack_handle(rpc);
-	return dsosd_handle_to_ptr(rpc, handle, want_type);
+	return dsosd_handle_to_ptr(rpc, handle, want_type, pctxt);
 }
 
 void dsosd_handle_free(dsosd_rpc_t *rpc, dsos_handle_t handle)
@@ -110,7 +113,7 @@ void rpc_handle_obj_create(dsosd_rpc_t *rpc)
 	sos_obj_ref_t	obj_id;
 	dsosd_client_t	*client = rpc->client;
 
-	schema = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA);
+	schema = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA, NULL);
 	flags  = dsosd_rpc_unpack_u32(rpc);
 
 	if (!schema) {
@@ -194,7 +197,7 @@ void rpc_handle_obj_delete(dsosd_rpc_t *rpc)
 	sos_obj_t	obj;
 	sos_obj_ref_t	obj_ref;
 
-	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	if (!cont) {
 		ret = EBADF;
 		goto out;
@@ -270,7 +273,8 @@ void rpc_handle_cont_open(dsosd_rpc_t *rpc)
 
 	cont = sos_container_open(path, perms);
 	if (cont)
-		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, cont, DSOSD_HANDLE_CONT));
+		dsosd_rpc_pack_handle(rpc,
+				      dsosd_ptr_to_handle(rpc, cont, DSOSD_HANDLE_CONT, 0));
 	else
 		ret = ENOENT;
 
@@ -289,7 +293,7 @@ void rpc_handle_cont_close(dsosd_rpc_t *rpc)
 	handle = dsosd_rpc_unpack_handle(rpc);
 	flags  = dsosd_rpc_unpack_u32(rpc);
 
-	cont = (sos_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_CONT);
+	cont = (sos_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_CONT, NULL);
 	if (!cont) {
 		dsosd_rpc_complete(rpc, EBADF);
 		return;
@@ -322,7 +326,7 @@ void rpc_handle_schema_by_name(dsosd_rpc_t *rpc)
 	sos_t		cont;
 	sos_schema_t	schema;
 
-	cont        = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont        = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	schema_name = dsosd_rpc_unpack_str(rpc);
 
 	if (!cont) {
@@ -332,7 +336,7 @@ void rpc_handle_schema_by_name(dsosd_rpc_t *rpc)
 
 	schema = sos_schema_by_name(cont, schema_name);
 	if (schema) {
-		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA);
+		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA, 0);
 		dsosd_rpc_pack_handle(rpc, schema_handle);
 		dsosd_rpc_pack_schema(rpc, schema);
 	} else {
@@ -351,7 +355,7 @@ void rpc_handle_schema_by_id(dsosd_rpc_t *rpc)
 	sos_t		cont;
 	sos_schema_t	schema;
 
-	cont      = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont      = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	schema_id = dsosd_rpc_unpack_u32(rpc);
 
 	if (!cont) {
@@ -361,7 +365,7 @@ void rpc_handle_schema_by_id(dsosd_rpc_t *rpc)
 
 	schema = sos_schema_by_id(cont, schema_id);
 	if (schema) {
-		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA);
+		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA, 0);
 		dsosd_rpc_pack_handle(rpc, schema_handle);
 		dsosd_rpc_pack_schema(rpc, schema);
 	} else {
@@ -380,7 +384,7 @@ void rpc_handle_schema_first(dsosd_rpc_t *rpc)
 	sos_t		cont;
 	sos_schema_t	schema = NULL;
 
-	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	if (!cont) {
 		ret = EBADF;
 		goto out;
@@ -388,7 +392,7 @@ void rpc_handle_schema_first(dsosd_rpc_t *rpc)
 
 	schema = sos_schema_first(cont);
 	if (schema) {
-		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA);
+		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA, 0);
 		dsosd_rpc_pack_handle(rpc, schema_handle);
 		dsosd_rpc_pack_schema(rpc, schema);
 	} else {
@@ -406,7 +410,7 @@ void rpc_handle_schema_next(dsosd_rpc_t *rpc)
 	dsos_handle_t	next_schema_handle;
 	sos_schema_t	next_schema = NULL, schema;
 
-	schema = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA);
+	schema = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA, NULL);
 	if (!schema) {
 		ret = EBADF;
 		goto out;
@@ -414,7 +418,7 @@ void rpc_handle_schema_next(dsosd_rpc_t *rpc)
 
 	next_schema = sos_schema_next(schema);
 	if (next_schema) {
-		next_schema_handle = dsosd_ptr_to_handle(rpc, next_schema, DSOSD_HANDLE_SCHEMA);
+		next_schema_handle = dsosd_ptr_to_handle(rpc, next_schema, DSOSD_HANDLE_SCHEMA, 0);
 		dsosd_rpc_pack_handle(rpc, next_schema_handle);
 		dsosd_rpc_pack_schema(rpc, next_schema);
 	} else {
@@ -433,14 +437,14 @@ void rpc_handle_schema_add(dsosd_rpc_t *rpc)
 	sos_t		cont;
 	sos_schema_t	schema;
 
-	cont   = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont   = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	schema = dsosd_rpc_unpack_schema(rpc);
 
 	if (!cont || !schema) {
 		ret = EBADF;
 	} else {
 		ret = sos_schema_add(cont, schema);
-		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA);
+		schema_handle = dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA, 0);
 		dsosd_rpc_pack_handle(rpc, schema_handle);
 	}
 
@@ -457,7 +461,7 @@ void rpc_handle_part_create(dsosd_rpc_t *rpc)
 	sos_schema_t	schema;
 	sos_t		cont;
 
-	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	name = dsosd_rpc_unpack_str(rpc);
 	path = dsosd_rpc_unpack_str(rpc);
 
@@ -480,7 +484,7 @@ void rpc_handle_part_find(dsosd_rpc_t *rpc)
 	sos_t		cont;
 	sos_part_t	part;
 
-	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	name = dsosd_rpc_unpack_str(rpc);
 
 	if (!cont) {
@@ -490,7 +494,7 @@ void rpc_handle_part_find(dsosd_rpc_t *rpc)
 
 	part = sos_part_find(cont, name);
 	if (part)
-		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, part, DSOSD_HANDLE_PART));
+		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, part, DSOSD_HANDLE_PART, 0));
 	else
 		ret = ENOENT;
  out:
@@ -508,7 +512,7 @@ void rpc_handle_part_set_state(dsosd_rpc_t *rpc)
 	state  = dsosd_rpc_unpack_u32(rpc);
 	handle = dsosd_rpc_unpack_handle(rpc);
 
-	part = (sos_part_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_PART);
+	part = (sos_part_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_PART, NULL);
 	if (!part) {
 		ret = EBADF;
 		goto out;
@@ -535,7 +539,7 @@ void rpc_handle_schema_from_template(dsosd_rpc_t *rpc)
 
 	schema = dsosd_rpc_unpack_schema(rpc);
 	if (schema)
-		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA));
+		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, schema, DSOSD_HANDLE_SCHEMA, 0));
 	else
 		ret = EINVAL;
  out:
@@ -553,7 +557,7 @@ void rpc_handle_obj_get(dsosd_rpc_t *rpc)
 	uint64_t	obj_remote_len;
 	sos_obj_ref_t	obj_id;
 
-	cont          = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT);
+	cont          = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_CONT, NULL);
 	obj_id        = dsosd_rpc_unpack_obj_id(rpc);
 	obj_remote_va = dsosd_rpc_unpack_obj_ptr(rpc, &obj_remote_len);
 
@@ -590,7 +594,7 @@ void rpc_handle_iter_close(dsosd_rpc_t *rpc)
 
 	handle = dsosd_rpc_unpack_handle(rpc);
 
-	iter = (sos_iter_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_ITER);
+	iter = (sos_iter_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_ITER, NULL);
 	if (!iter) {
 		ret = EBADF;
 		goto out;
@@ -614,7 +618,7 @@ void rpc_handle_iter_new(dsosd_rpc_t *rpc)
 	sos_iter_t	iter;
 
 	attr_id = dsosd_rpc_unpack_u32(rpc);
-	schema  = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA);
+	schema  = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_SCHEMA, NULL);
 
 	if (!schema) {
 		ret = EBADF;
@@ -629,7 +633,7 @@ void rpc_handle_iter_new(dsosd_rpc_t *rpc)
 
 	iter = sos_attr_iter_new(attr);
 	if (iter)
-		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, iter, DSOSD_HANDLE_ITER));
+		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, iter, DSOSD_HANDLE_ITER, 0));
 	else
 		ret = ENOENT;
 
@@ -649,7 +653,7 @@ void rpc_handle_iter_step(dsosd_rpc_t *rpc)
 	sos_obj_t	obj = NULL;
 
 	op     = dsosd_rpc_unpack_u32(rpc);
-	iter   = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_ITER);
+	iter   = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_ITER, NULL);
 	obj_va = dsosd_rpc_unpack_obj_ptr(rpc, &obj_sz);
 	key    = dsosd_rpc_unpack_key(rpc);
 
@@ -697,7 +701,7 @@ void rpc_handle_filter_step(dsosd_rpc_t *rpc)
 	sos_obj_t	obj = NULL;
 
 	op     = dsosd_rpc_unpack_u32(rpc);
-	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER);
+	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER, NULL);
 	obj_va = dsosd_rpc_unpack_obj_ptr(rpc, &obj_sz);
 
 	if (!filter) {
@@ -728,10 +732,13 @@ void rpc_handle_filter_step(dsosd_rpc_t *rpc)
 void rpc_handle_filter_new(dsosd_rpc_t *rpc)
 {
 	int		ret = 0;
+	dsos_handle_t	iter_handle;
 	sos_iter_t	iter;
 	sos_filter_t	filter;
 
-	iter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_ITER);
+	iter_handle = dsosd_rpc_unpack_handle(rpc);
+
+	iter = dsosd_handle_to_ptr(rpc, iter_handle, DSOSD_HANDLE_ITER, NULL);
 	if (!iter) {
 		ret = EBADF;
 		goto out;
@@ -739,7 +746,7 @@ void rpc_handle_filter_new(dsosd_rpc_t *rpc)
 
 	filter = sos_filter_new(iter);
 	if (filter)
-		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, filter, DSOSD_HANDLE_FILTER));
+		dsosd_rpc_pack_handle(rpc, dsosd_ptr_to_handle(rpc, filter, DSOSD_HANDLE_FILTER, iter_handle));
 	else
 		ret = ENOENT;
 
@@ -750,12 +757,12 @@ void rpc_handle_filter_new(dsosd_rpc_t *rpc)
 
 void rpc_handle_filter_free(dsosd_rpc_t *rpc)
 {
-	dsos_handle_t	handle;
+	dsos_handle_t	filter_handle, iter_handle;
 	sos_filter_t	filter;
 
-	handle = dsosd_rpc_unpack_handle(rpc);
+	filter_handle = dsosd_rpc_unpack_handle(rpc);
 
-	filter = (sos_filter_t)dsosd_handle_to_ptr(rpc, handle, DSOSD_HANDLE_FILTER);
+	filter = (sos_filter_t)dsosd_handle_to_ptr(rpc, filter_handle, DSOSD_HANDLE_FILTER, &iter_handle);
 	if (!filter) {
 		dsosd_rpc_complete(rpc, EBADF);
 		return;
@@ -764,7 +771,13 @@ void rpc_handle_filter_free(dsosd_rpc_t *rpc)
 	dsosd_debug("rpc %p: filter %p\n", rpc, filter);
 
 	sos_filter_free(filter);
-	dsosd_handle_free(rpc, handle);
+	dsosd_handle_free(rpc, filter_handle);
+
+	/*
+	 * Free iter_handle since the sos_filter_free() did the
+	 * sos_iter_close() on the iterator.
+	 */
+	dsosd_handle_free(rpc, iter_handle);
 
 	dsosd_rpc_complete(rpc, 0);
 }
@@ -773,7 +786,7 @@ void rpc_handle_filter_miss_count(dsosd_rpc_t *rpc)
 {
 	sos_filter_t	filter;
 
-	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER);
+	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER, NULL);
 	if (!filter) {
 		dsosd_rpc_complete(rpc, EBADF);
 		return;
@@ -790,7 +803,7 @@ void rpc_handle_filter_flags_get(dsosd_rpc_t *rpc)
 {
 	sos_filter_t	filter;
 
-	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER);
+	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER, NULL);
 	if (!filter) {
 		dsosd_rpc_complete(rpc, EBADF);
 		return;
@@ -808,7 +821,7 @@ void rpc_handle_filter_flags_set(dsosd_rpc_t *rpc)
 	sos_iter_flags_t	flags;
 	sos_filter_t		filter;
 
-	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER);
+	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER, NULL);
 	flags  = dsosd_rpc_unpack_u32(rpc);
 	if (!filter) {
 		dsosd_rpc_complete(rpc, EBADF);
@@ -831,7 +844,7 @@ void rpc_handle_filter_cond_add(dsosd_rpc_t *rpc)
 	sos_iter_flags_t	flags;
 	sos_filter_t		filter;
 
-	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER);
+	filter = dsosd_rpc_unpack_handle_to_ptr(rpc, DSOSD_HANDLE_FILTER, NULL);
 	attr   = dsosd_rpc_unpack_attr(rpc);
 	cond   = dsosd_rpc_unpack_u32(rpc);
 	value  = dsosd_rpc_unpack_value(rpc);

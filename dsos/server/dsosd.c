@@ -506,7 +506,18 @@ void dsosd_client_get(dsosd_client_t *client)
 	dsosd_debug("%p refcount now %d\n", client, client->refcount);
 }
 
-static int handle_traverse(struct rbn *rbn, void *ctxt, int level)
+static int handle_traverse_dump(struct rbn *rbn, void *ctxt, int level)
+{
+	struct ptr_rbn		*rbn_ptr = (struct ptr_rbn *)rbn;
+
+	dsosd_debug("client %p handle for %s 0x%lx => %p still open\n",
+		    ctxt,
+		    dsosd_handle_type_str(rbn_ptr->type),
+		    rbn_ptr->rbn.key,
+		    rbn_ptr->ptr);
+}
+
+static int handle_traverse_close(struct rbn *rbn, void *ctxt, int level)
 {
 	dsosd_handle_type_t	to_close = (dsosd_handle_type_t)ctxt;
 	struct ptr_rbn		*rbn_ptr = (struct ptr_rbn *)rbn;
@@ -544,15 +555,15 @@ void dsosd_client_put(dsosd_client_t *client)
 		if (client->heap_buf)
 			free(client->heap_buf);
 #endif
-
-// sometimes this crashes with what looks like a double index close
-#if 0
-		/* Close all open iterators. */
-		rbt_traverse(&client->handle_rbt, handle_traverse, (void *)DSOSD_HANDLE_ITER);
+#ifdef DSOSD_DEBUG
+		rbt_traverse(&client->handle_rbt, handle_traverse_dump, client);
 #endif
 
+		/* Close all open iterators. */
+		rbt_traverse(&client->handle_rbt, handle_traverse_close, (void *)DSOSD_HANDLE_ITER);
+
 		/* Close all open containers. */
-		rbt_traverse(&client->handle_rbt, handle_traverse, (void *)DSOSD_HANDLE_CONT);
+		rbt_traverse(&client->handle_rbt, handle_traverse_close, (void *)DSOSD_HANDLE_CONT);
 
 		/* Free the handle rbt. */
 		while (rbn = rbt_min(&client->handle_rbt)) {

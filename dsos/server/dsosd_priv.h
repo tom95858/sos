@@ -78,6 +78,7 @@ struct ptr_rbn {
 	struct rbn	rbn;
 	void		*ptr;
 	int		type;
+	dsos_handle_t	ctxt;
 };
 
 /*
@@ -117,8 +118,9 @@ void		dsosd_rpc_get(dsosd_rpc_t *rpc);
 dsosd_rpc_t	*dsosd_rpc_new(dsosd_client_t *client, dsos_msg_t *msg, size_t len);
 void		dsosd_rpc_put(dsosd_rpc_t *rpc);
 
-dsos_handle_t	dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type_t type);
-void		*dsosd_handle_to_ptr(dsosd_rpc_t *rpc, dsos_handle_t handle, dsosd_handle_type_t type);
+dsos_handle_t	dsosd_ptr_to_handle(dsosd_rpc_t *rpc, void *ptr, dsosd_handle_type_t type, dsos_handle_t ctxt);
+void		*dsosd_handle_to_ptr(dsosd_rpc_t *rpc, dsos_handle_t handle, dsosd_handle_type_t type,
+				     dsos_handle_t *pctxt);
 void		dsosd_handle_free(dsosd_rpc_t *rpc, dsos_handle_t handle);
 const char	*dsosd_handle_type_str(dsosd_handle_type_t type);
 
@@ -157,7 +159,8 @@ int		dsosd_rpc_pack_obj_id(dsosd_rpc_t *rpc, sos_obj_ref_t obj_id);
 int		dsosd_rpc_pack_schema(dsosd_rpc_t *rpc, sos_schema_t schema);
 int		dsosd_rpc_pack_u32(dsosd_rpc_t *rpc, uint32_t val);
 dsos_handle_t	dsosd_rpc_unpack_handle(dsosd_rpc_t *rpc);
-void		*dsosd_rpc_unpack_handle_to_ptr(dsosd_rpc_t *rpc, dsosd_handle_type_t want_type);
+void		*dsosd_rpc_unpack_handle_to_ptr(dsosd_rpc_t *rpc, dsosd_handle_type_t want_type,
+						dsos_handle_t *pctxt);
 sos_key_t	dsosd_rpc_unpack_key(dsosd_rpc_t *rpc);
 uint32_t	dsosd_rpc_unpack_u32(dsosd_rpc_t *rpc);
 int		dsosd_rpc_unpack_obj(dsosd_rpc_t *rpc, sos_obj_t obj);

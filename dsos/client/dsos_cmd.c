@@ -363,7 +363,7 @@ int do_import(int ac, char *av[])
 	// Wait until all object-creation callbacks have occurred.
 	dsos_obj_wait_for_all();
 
-	if (num_objs % progress)
+	if (progress && (num_objs % progress))
 		print_elapsed(num_objs % progress, num_objs, beg, last);
 
 	dsos_container_close(cont, SOS_COMMIT_SYNC);

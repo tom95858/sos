@@ -227,7 +227,7 @@ void do_ping()
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	if (num_iters % progress)
+	if (progress && (num_iters % progress))
 		print_elapsed(num_iters % progress, num_iters, beg, last);
 }
 
@@ -401,7 +401,7 @@ void do_obj_creates()
 	if (!sequential)
 		dsos_obj_wait_for_all();
 
-	if (num_iters % progress)
+	if (progress && (num_iters % progress))
 		print_elapsed(num_iters % progress, num_iters, beg, last);
 	free(mydata);
 }
@@ -476,7 +476,7 @@ void do_obj_iter_finds()
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	if (num_iters % progress)
+	if (progress && (num_iters % progress))
 		print_elapsed(num_iters % progress, num_iters, beg, last);
 	dsos_iter_free(iter);
 	free(mydata);
@@ -524,7 +524,7 @@ void do_obj_deletes()
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	if (num_iters % progress)
+	if (progress && (num_iters % progress))
 		print_elapsed(num_iters % progress, num_iters, beg, last);
 	dsos_iter_free(iter);
 	free(mydata);
@@ -644,7 +644,7 @@ void do_local()
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	if (num_iters % progress)
+	if (progress && (num_iters % progress))
 		print_elapsed(num_iters % progress, num_iters, beg, last);
 	free(mydata);
 }
