@@ -1,5 +1,13 @@
 #include "dsos_priv.h"
 
+void dsos_obj_init()
+{
+	g.obj_create.pending = 0;
+
+	pthread_mutex_init(&g.obj_create.lock, 0);
+	pthread_cond_init(&g.obj_create.none_pending, NULL);
+}
+
 int dsos_obj_server(sos_obj_t obj)
 {
 	return obj->obj_ref.ref.ods;
@@ -45,16 +53,30 @@ static void obj_create_cb(dsos_rpc_t *rpc, dsos_rpc_flags_t flags, dsos_buf_t *r
 		   obj, resp->len, server_num, rpc, rpc->ctxt2.ptr1, rpc->ctxt2.ptr2,
 		   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
 
+	/*
+	 * If the caller gave a callback, call it. Otherwise it means
+	 * they wanted a totally asynchronous object creation, so do
+	 * the sos_obj_put() for them.
+	 */
 	if (cb)
 		cb(obj, rpc->ctxt2.ptr2);
+	else
+		sos_obj_put(obj);
 
 	/* Drop the ref taken in dsos_obj_create(). */
 	sos_obj_put(obj);
 
 	dsos_rpc_put(rpc);
+
+	/* Signal any waiters. This is to implement dsos_obj_wait_for_all(). */
+	pthread_mutex_lock(&g.obj_create.lock);
+	if (--g.obj_create.pending == 0)
+		pthread_cond_signal(&g.obj_create.none_pending);
+	pthread_mutex_unlock(&g.obj_create.lock);
 }
 
 int dsos_obj_create(sos_obj_t obj, dsos_obj_cb_t cb, void *ctxt)
+
 {
 	int		server_num;
 	char		*obj_data;
@@ -80,6 +102,10 @@ int dsos_obj_create(sos_obj_t obj, dsos_obj_cb_t cb, void *ctxt)
 
 	rpc->ctxt2.ptr1 = cb;
 	rpc->ctxt2.ptr2 = ctxt;
+
+	pthread_mutex_lock(&g.obj_create.lock);
+	++g.obj_create.pending;
+	pthread_mutex_unlock(&g.obj_create.lock);
 
 	return dsos_rpc_send_cb(rpc, DSOS_RPC_CB, obj_create_cb, obj);
 }
@@ -125,4 +151,12 @@ int dsos_obj_delete(sos_obj_t obj)
 	dsos_rpc_pack_obj_id_one(rpc, obj->obj_ref);
 
 	return dsos_rpc_send_one(rpc, DSOS_RPC_WAIT | DSOS_RPC_PUT, server_num);
+}
+
+void dsos_obj_wait_for_all()
+{
+	pthread_mutex_lock(&g.obj_create.lock);
+	while (g.obj_create.pending)
+		pthread_cond_wait(&g.obj_create.none_pending, &g.obj_create.lock);
+	pthread_mutex_unlock(&g.obj_create.lock);
 }

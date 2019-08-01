@@ -122,5 +122,7 @@ int dsos_init(const char *config_filename)
 		g.opts.max_rpc_sz = DSOS_DEFAULT_MAX_RPC_SZ;
 	dsos_rpc_init();
 
+	dsos_obj_init();
+
 	return 0;
 }

@@ -58,6 +58,7 @@ struct opts_s {
 struct globals_s {
 	json_entity_t		config;            // config as a json tree
 	int			num_servers;       // # dsos servers
+	int			num_objs;          // # dsos objects created so far
 	struct opts_s		opts;              // options
 	dsos_conn_t		*conns;            // array of server connection objects
 	zap_t			zap;               // transport
@@ -65,6 +66,11 @@ struct globals_s {
 	mm_region_t		heap;              // heap shared w/servers
 	size_t			heap_sz;           // size of heap
 	char			*heap_buf;         // registered buffer for heap
+	struct {
+		pthread_mutex_t	lock;              // locks this sub-structure
+		pthread_cond_t	none_pending;      // signaled when # pending creates becomes 0
+		int		pending;           // # pending obj creates
+	} obj_create;
 };
 extern struct globals_s g;
 
@@ -231,10 +237,12 @@ int		dsos_connect(const char *host, const char *service, int server_id, int wait
 void		dsos_disconnect(void);
 void		dsos_err_init(void);
 void		dsos_free(void *ptr);
-sos_obj_t	dsos_obj_malloc(sos_schema_t schema);
-sos_obj_t	*dsos_obj_calloc(int num_objs, sos_schema_t schema);
 const char	*dsos_msg_type_to_str(int id);
+sos_obj_t	*dsos_obj_calloc(int num_objs, sos_schema_t schema);
+void		dsos_obj_init(void);
+sos_obj_t	dsos_obj_malloc(sos_schema_t schema);
 int		dsos_obj_server(sos_obj_t obj);
+void		dsos_obj_wait_for_all(void);
 
 #define dsos_debug(fmt, ...)	sos_log(SOS_LOG_DEBUG, __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define dsos_error(fmt, ...)	sos_log(SOS_LOG_ERROR, __func__, __LINE__, fmt, ##__VA_ARGS__)

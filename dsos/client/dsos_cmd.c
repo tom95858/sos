@@ -243,7 +243,6 @@ static void obj_cb(sos_obj_t obj, void *ctxt)
 {
 	if (import_verbose)
 		printf("obj_id %lx%lx\n", obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
-	sem_post((sem_t *)ctxt);
 }
 
 /*
@@ -265,7 +264,7 @@ int do_import(int ac, char *av[])
 	struct option	lopts[] = {
 		{ "cont",	required_argument, NULL, 'c' },
 		{ "schema",	required_argument, NULL, 's' },
-		{ "progress",   no_argument,       NULL, 'g' },
+		{ "progress",   optional_argument, NULL, 'g' },
 		{ "verbose",	no_argument,       NULL, 'v' },
 		{ 0,		0,		   0,     0  }
 	};
@@ -274,14 +273,19 @@ int do_import(int ac, char *av[])
 		switch (c) {
 		    case 'c': cont_nm   = strdup(optarg); break;
 		    case 's': schema_nm = strdup(optarg); break;
-		    case 'g': progress = 1; break;
 		    case 'v': import_verbose = 1; break;
+		    case 'g':
+			if (optarg)
+				progress = atoi(optarg);
+			else
+				progress = 10000;
+			break;
 		    default:
 			usage();
 			fprintf(stderr, "options:\n");
 			fprintf(stderr, "  --cont <path>      Container path\n");
 			fprintf(stderr, "  --schema <name>    Schema name\n");
-			fprintf(stderr, "  --progress\n");
+			fprintf(stderr, "  --progress [n]     Show rate every n objects\n");
 			fprintf(stderr, "  --verbose\n");
 			return 1;
 		}
@@ -348,8 +352,8 @@ int do_import(int ac, char *av[])
 		}
 		sos_obj_put(obj);
 		++num_objs;
-		if (progress && num_objs && ((num_objs % 10000) == 0)) {
-			print_elapsed(1000, num_objs, beg, last);
+		if (progress && num_objs && ((num_objs % progress) == 0)) {
+			print_elapsed(progress, num_objs, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
@@ -357,10 +361,10 @@ int do_import(int ac, char *av[])
 	fclose(fp);
 
 	// Wait until all object-creation callbacks have occurred.
-	for (i = 0; i < num_objs; ++i)
-		sem_wait(&sem);
+	dsos_obj_wait_for_all();
 
-	print_elapsed(1000, num_objs, beg, last);
+	if (num_objs % progress)
+		print_elapsed(num_objs % progress, num_objs, beg, last);
 
 	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	return 0;
@@ -708,7 +712,6 @@ struct migrate_rbn {
 
 /* This is used as the context argument for migrate_cb. */
 struct migrate_ctxt_s {
-	sem_t		*sem;
 	int		num_objs;
 	int		max_objs;
 	int		verbose;
@@ -757,7 +760,6 @@ static void dsos_cb(sos_obj_t dsos_obj, void *ctxt)
 		pthread_mutex_unlock(&log_lock);
 	}
 
-	sem_post(args->sem);
 	sos_obj_put(dsos_obj);
 }
 
@@ -787,8 +789,8 @@ static int migrate_cb(sos_part_t part, sos_obj_t sos_obj, void *ctxt)
 		       dsos_obj);
 		pthread_mutex_unlock(&log_lock);
 	}
-	if (args->progress && ((args->num_objs % 1000) == 0)) {
-		print_elapsed(1000, args->num_objs, args->ts_beg, args->ts_last);
+	if (args->progress && ((args->num_objs % args->progress) == 0)) {
+		print_elapsed(args->progress, args->num_objs, args->ts_beg, args->ts_last);
 		clock_gettime(CLOCK_REALTIME, &args->ts_last);
 	}
 
@@ -817,7 +819,6 @@ int do_migrate(int ac, char *av[])
 	sos_obj_t	obj;
 	sos_iter_t	sos_iter;
 	sos_attr_t	attr;
-	sem_t		sem;
 	struct migrate_ctxt_s ctxt;
 
 	struct option	lopts[] = {
@@ -825,7 +826,7 @@ int do_migrate(int ac, char *av[])
 		{ "sos-cont",	required_argument, NULL, 'c' },
 		{ "num",        required_argument, NULL, 'n' },
 		{ "schema",	required_argument, NULL, 's' },
-		{ "progress",   no_argument,       NULL, 'g' },
+		{ "progress",   optional_argument, NULL, 'g' },
 		{ "verbose",	no_argument,       NULL, 'v' },
 		{ 0,		0,		   0,     0  }
 	};
@@ -835,9 +836,14 @@ int do_migrate(int ac, char *av[])
 		    case 'c': sos_cont_nm  = strdup(optarg); break;
 		    case 'd': dsos_cont_nm = strdup(optarg); break;
 		    case 's': schema_nm    = strdup(optarg); break;
-		    case 'n': max_objs = atoi(optarg); break;
-		    case 'g': progress = 1; break;
-		    case 'v': verbose  = 1; break;
+		    case 'n': max_objs     = atoi(optarg); break;
+		    case 'v': verbose      = 1; break;
+		    case 'g':
+			if (optarg)
+				progress = atoi(optarg);
+			else
+				progress = 10000;
+			break;
 		    default:
 			usage();
 			fprintf(stderr, "options:\n");
@@ -845,7 +851,7 @@ int do_migrate(int ac, char *av[])
 			fprintf(stderr, "  --dsos-cont <path>   DSOS container path to create\n");
 			fprintf(stderr, "  --schema <name>      optional: schema to migrate\n");
 			fprintf(stderr, "  --num <max_objs>     optional: max # objects to migrate\n");
-			fprintf(stderr, "  --progress\n");
+			fprintf(stderr, "  --progress [n]       optional: show rate every n objects\n");
 			fprintf(stderr, "  --verbose\n");
 			return 1;
 		}
@@ -921,8 +927,6 @@ int do_migrate(int ac, char *av[])
 
 	if (verbose)
 		printf("begin iteration\n");
-	sem_init(&sem, 0, 0);
-	ctxt.sem      = &sem;
 	ctxt.num_objs = 0;
 	ctxt.max_objs = max_objs;
 	ctxt.verbose  = verbose;
@@ -934,11 +938,10 @@ int do_migrate(int ac, char *av[])
 	// Wait until all object-creation callbacks have occurred.
 	if (verbose)
 		printf("end iteration. waiting for all callbacks. %d objects.\n", ctxt.num_objs);
-	for (i = 0; i < ctxt.num_objs; ++i)
-		sem_wait(&sem);
-	if (progress) {
+	dsos_obj_wait_for_all();
+	if (progress && (ctxt.num_objs % progress)) {
 		clock_gettime(CLOCK_REALTIME, &ctxt.ts_last);
-		print_elapsed(1000, ctxt.num_objs, ctxt.ts_beg, ctxt.ts_last);
+		print_elapsed(ctxt.num_objs % progress, ctxt.num_objs, ctxt.ts_beg, ctxt.ts_last);
 	}
 	if (verbose)
 		printf("all callbacks complete.\n");

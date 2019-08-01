@@ -1,3 +1,7 @@
+/*
+ * This is a playground for testing and experimentation.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -72,7 +76,7 @@ int main(int ac, char *av[])
 		{ "loop",       no_argument,       NULL, 'L' },
 		{ "numiters",	required_argument, NULL, 'n' },
 		{ "ping",       required_argument, NULL, 'p' },
-		{ "progress",   no_argument,       NULL, 'g' },
+		{ "progress",   optional_argument, NULL, 'g' },
 		{ "sequential", no_argument,       NULL, 'q' },
 		{ "sleep",	required_argument, NULL, 's' },
 		{ "start",	required_argument, NULL, 'S' },
@@ -105,7 +109,10 @@ int main(int ac, char *av[])
 			deletes = 1;
 			break;
 		    case 'g':
-			progress = 1;
+			if (optarg)
+				progress = atoi(optarg);
+			else
+				progress = 50000;
 			break;
 		    case 'q':
 			sequential = 1;
@@ -203,24 +210,25 @@ void do_ping()
 
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
-	for (i = 0; i < num_iters; ++i) {
+	for (i = 1; i <= num_iters; ++i) {
 		ret = dsos_ping_one(server_num, &stats, 0);
 		if (ret) {
 			printf("error %d\n", ret);
 			fflush(stdout);
 			exit(1);
 		}
-		if (progress && i && ((i % 50000) == 0)) {
+		if (progress && i && ((i % progress) == 0)) {
 			printf("%d/%d conn/disc %d reqs %d clients\n",
 			       stats.tot_num_connects,
 			       stats.tot_num_disconnects,
 			       stats.tot_num_reqs,
 			       stats.num_clients);
-			print_elapsed(50000, i, beg, last);
+			print_elapsed(progress, i, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	print_elapsed(50000, num_iters, beg, last);
+	if (num_iters % progress)
+		print_elapsed(num_iters % progress, num_iters, beg, last);
 }
 
 void do_init()
@@ -357,7 +365,7 @@ void do_obj_creates()
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 
-	for (i = 0; i < num_iters; ++i) {
+	for (i = 1; i <= num_iters; ++i) {
 		obj = dsos_obj_alloc(schema);
 		if (!obj) {
 			dsos_perror("could not create object %d", i);
@@ -381,8 +389,8 @@ void do_obj_creates()
 		if (sequential)
 			sem_wait(&sem);
 
-		if (progress && i && ((i % 50000) == 0)) {
-			print_elapsed(50000, i, beg, last);
+		if (progress && i && ((i % progress) == 0)) {
+			print_elapsed(progress, i, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 
@@ -390,13 +398,11 @@ void do_obj_creates()
 			nanosleep(&sleep_ts, NULL);
 	}
 
-	if (!sequential) {
-		// Wait until all object-creation callbacks have occurred.
-		for (i = 0; i < num_iters; ++i)
-			sem_wait(&sem);
-	}
+	if (!sequential)
+		dsos_obj_wait_for_all();
 
-	print_elapsed(50000, num_iters, beg, last);
+	if (num_iters % progress)
+		print_elapsed(num_iters % progress, num_iters, beg, last);
 	free(mydata);
 }
 
@@ -449,7 +455,7 @@ void do_obj_iter_finds()
 	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
-	for (i = 0; i < num_iters; ++i) {
+	for (i = 1; i <= num_iters; ++i) {
 		key = sos_key_for_attr(NULL, attr_seq, num);
 		dsos_iter_find(iter, key);
 		obj = dsos_iter_obj(iter);
@@ -465,12 +471,13 @@ void do_obj_iter_finds()
 		}
 		sos_obj_put(obj);
 		++num;
-		if (progress && i && ((i % 50000) == 0)) {
-			print_elapsed(50000, i, beg, last);
+		if (progress && i && ((i % progress) == 0)) {
+			print_elapsed(progress, i, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	print_elapsed(50000, num_iters, beg, last);
+	if (num_iters % progress)
+		print_elapsed(num_iters % progress, num_iters, beg, last);
 	dsos_iter_free(iter);
 	free(mydata);
 }
@@ -495,7 +502,7 @@ void do_obj_deletes()
 	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
-	for (i = 0; i < num_iters; ++i) {
+	for (i = 1; i <= num_iters; ++i) {
 		dsos_iter_begin(iter);
 		obj = dsos_iter_obj(iter);
 		if (!obj) {
@@ -512,12 +519,13 @@ void do_obj_deletes()
 		sos_obj_put(obj);
 
 		++num;
-		if (progress && i && ((i % 50000) == 0)) {
-			print_elapsed(50000, i, beg, last);
+		if (progress && i && ((i % progress) == 0)) {
+			print_elapsed(progress, i, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	print_elapsed(50000, num_iters, beg, last);
+	if (num_iters % progress)
+		print_elapsed(num_iters % progress, num_iters, beg, last);
 	dsos_iter_free(iter);
 	free(mydata);
 }
@@ -608,7 +616,7 @@ void do_local()
 	num = start_num;
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
-	for (i = 0; i < num_iters; ++i) {
+	for (i = 1; i <= num_iters; ++i) {
 		sos_obj_t obj = sos_obj_new(schema);
 		if (!obj) {
 			fprintf(stderr, "could not create object %d", i);
@@ -631,12 +639,13 @@ void do_local()
 
 		sos_obj_put(obj);
 
-		if (progress && i && ((i % 50000) == 0)) {
-			print_elapsed(50000, i, beg, last);
+		if (progress && i && ((i % progress) == 0)) {
+			print_elapsed(progress, i, beg, last);
 			clock_gettime(CLOCK_REALTIME, &last);
 		}
 	}
-	print_elapsed(50000, num_iters, beg, last);
+	if (num_iters % progress)
+		print_elapsed(num_iters % progress, num_iters, beg, last);
 	free(mydata);
 }
 

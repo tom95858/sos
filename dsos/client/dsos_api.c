@@ -343,14 +343,15 @@ static sos_obj_t iter_get_min(dsos_iter_t *iter)
 
 static void iter_remove_min(dsos_iter_t *iter)
 {
+	char		buf[16];
 	sos_obj_t	obj;
 	struct iter_rbn	*rbn;
 
 	rbn = (struct iter_rbn *)rbt_min(&iter->rbt);
 	if (rbn) {
 		obj = rbn->obj;
-		dsos_debug("iter %p min value %ld obj_id %08lx%08lx\n",
-			   iter, ((sos_value_t)rbn->rbn.key)->data->prim.uint64_,
+		dsos_debug("iter %p min value %s obj_id %08lx%08lx\n",
+			   iter, sos_value_to_str((sos_value_t)rbn->rbn.key,buf,sizeof(buf)),
 			   obj->obj_ref.ref.ods, obj->obj_ref.ref.obj);
 		rbt_del(&iter->rbt, (struct rbn *)rbn);
 		sos_value_put(rbn->rbn.key);
