@@ -395,6 +395,8 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 		}
 	}
 	if (dsos_err_status(rpc->status) & DSOS_ERR_LOCAL) {
+		dsos_err_free(dsos_errno);
+		dsos_errno = rpc->status;
 		dsos_rpc_put(rpc);
 		return DSOS_ERR_LOCAL;
 	}

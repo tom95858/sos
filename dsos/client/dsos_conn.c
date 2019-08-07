@@ -84,6 +84,7 @@ static void client_cb(zap_ep_t ep, zap_event_t ev)
 				   ev->data_len, conn->msg.len, conn->msg.msg, conn->msg.allocated);
 			break;
 		} else {
+			/* A single-message RPC. */
 			dsos_rpc_handle_resp(conn, msg, ev->data_len);
 		}
 		break;

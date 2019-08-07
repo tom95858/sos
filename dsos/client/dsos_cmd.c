@@ -74,7 +74,8 @@ int main(int ac, char *av[])
 		usage();
 		ret = 1;
 	}
-//	dsos_disconnect();
+	if (!ret)
+		dsos_disconnect();
 	return ret;
 }
 

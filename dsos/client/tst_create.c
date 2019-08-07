@@ -198,7 +198,6 @@ int main(int ac, char *av[])
 
 	dsos_container_close(cont, SOS_COMMIT_SYNC);
 	dsos_disconnect();
-	sleep(1);
 }
 
 void do_ping()
