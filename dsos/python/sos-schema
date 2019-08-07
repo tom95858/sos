@@ -50,6 +50,13 @@ import numpy as np
 import argparse
 from sosdb import Sos
 import json
+import gzip
+
+def fileopener(fn):
+    """return the correct open function for the filename (default or gzip.open)"""
+    if fn.endswith(".gz") or fn.endswith(".GZ"):
+        return gzip.open
+    return open
 
 def query_schema(cont, schema_name, verbose=False):
     count = 0
@@ -94,7 +101,7 @@ def query_schema(cont, schema_name, verbose=False):
 
 def add_schema(cont, path):
     try:
-        fp = open(path, 'r')
+        fp = fileopener(path)(path, 'r')
         spec = json.load(fp)
         schema = Sos.Schema()
         schema.from_template(spec['name'], spec['attrs'])
@@ -112,7 +119,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", dest="verbose",
                         help="Display all of the schema's attributes.")
     parser.add_argument("-a", "--add", metavar="JSON-FILE", dest="add",
-                        help="Add the schema defined in the JSON-FILE to the container.")
+                        help="Add the schema defined in the JSON-FILE to the container. JSON-FILE may be gzipped.")
     args = parser.parse_args()
 
     if not args.query and not args.add:
