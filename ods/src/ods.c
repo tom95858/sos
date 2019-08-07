@@ -241,7 +241,7 @@ static int init_pgtbl(int pg_fd)
 	pgt.pg_vers.major = ODS_VER_MAJOR;
 	pgt.pg_vers.minor = ODS_VER_MINOR;
 	pgt.pg_vers.fix = ODS_VER_FIX;
-	strncpy(pgt.pg_commit_id, ODS_COMMIT_ID, sizeof(pgt.pg_commit_id));
+	strncpy(pgt.pg_vers.git_commit_id, ODS_COMMIT_ID, sizeof(pgt.pg_vers.git_commit_id));
 	pgt.pg_gen = 1;
 	pgt.pg_count = count;
 	pgt.pg_free = 1;
@@ -296,22 +296,47 @@ static int init_pgtbl(int pg_fd)
 	return 0;
 }
 
-struct ods_version_s ods_version(ods_t ods)
+int ods_file_version(const char *path, struct ods_version_s *ver)
+{
+	char tmp_path[PATH_MAX];
+	int pg_fd, rc = 0;
+	ods_pgt_t pgt;
+
+	/* Open the page table file */
+	sprintf(tmp_path, "%s%s", path, ODS_PGTBL_SUFFIX);
+	pg_fd = open(tmp_path, O_RDWR);
+	if (pg_fd < 0) {
+		rc = errno;
+		goto err_0;
+	}
+
+	pgt = mmap(NULL, ODS_PAGE_SIZE,
+		   PROT_READ | PROT_WRITE,
+		   MAP_FILE | MAP_PRIVATE, pg_fd, 0);
+	if (pgt == MAP_FAILED) {
+		rc = errno;
+		goto err_1;
+	}
+	*ver = pgt->pg_vers;
+	if (ver->major < 5)
+		strncpy(ver->git_commit_id, pgt->_pg_commit_id, sizeof(ver->git_commit_id));
+ err_1:
+	close(pg_fd);
+ err_0:
+	return rc;
+}
+
+void ods_version(ods_t ods, struct ods_version_s *ver)
 {
 	ods_pgt_t pgt;
-	struct ods_version_s ver = { 0, 0, 0, "" };
-	static char commit_id[] = "........................................";
 
 	__ods_lock(ods);
 	pgt = pgt_get(ods);
 	if (!pgt)
 		goto out;
-	ver = pgt->pg_vers;
-	strncpy(commit_id, pgt->pg_commit_id, sizeof(commit_id));
-	ver.git_commit_id = commit_id;
+	*ver = pgt->pg_vers;
  out:
 	__ods_unlock(ods);
-	return ver;
 }
 
 static int init_obj(int obj_fd)

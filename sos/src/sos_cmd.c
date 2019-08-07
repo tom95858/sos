@@ -1080,16 +1080,23 @@ int main(int argc, char **argv)
 		mode = SOS_PERM_RO;
 	else
 		mode = SOS_PERM_RW;
+
+	if (action & VERSION) {
+		struct sos_version_s vers;
+		rc = sos_container_file_version(path, &vers);
+		if (rc) {
+			printf("Error %d obtaining container version.\n", rc);
+			return rc;
+		}
+		printf("Container Version : %d.%d.%d\n", vers.major, vers.minor, vers.fix);
+		printf("Git Commit ID     : %s\n", vers.git_commit_id);
+	}
+
 	sos = sos_container_open(path, mode);
 	if (!sos) {
 		printf("Error %d opening the container %s.\n",
 		       errno, path);
 		exit(1);
-	}
-	if (action & VERSION) {
-		struct sos_version_s vers = sos_container_version(sos);
-		printf("Container Version : %d.%d.%d\n", vers.major, vers.minor, vers.fix);
-		printf("Git Commit ID     : %s\n", vers.git_commit_id);
 	}
 
 	if (action & INFO)

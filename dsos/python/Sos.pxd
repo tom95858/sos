@@ -418,9 +418,10 @@ cdef extern from "sos/sos.h":
         uint8_t major
         uint8_t minor
         uint16_t fix
-        char *git_commit_id
+        char git_commit_id[41]
 
-    sos_version_s sos_container_version(sos_t c)
+    int sos_container_file_version(const char *path, sos_version_s *vers)
+    void sos_container_version(sos_t c, sos_version_s *vers)
     int sos_container_new(const char *path, int o_mode)
     sos_t sos_container_open(const char *path, sos_perm_t o_perm)
     int sos_container_stat(sos_t sos, stat *sb)

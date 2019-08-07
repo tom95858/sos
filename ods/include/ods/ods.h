@@ -119,7 +119,7 @@ extern const char *ods_path(ods_t ods);
  */
 extern ods_t ods_open(const char *path, ods_perm_t o_perm);
 
-#define ODS_VER_MAJOR	4
+#define ODS_VER_MAJOR	5
 #define ODS_VER_MINOR	1
 #define ODS_VER_FIX	0
 
@@ -128,14 +128,17 @@ struct ods_version_s {
 	uint8_t major;		/* Binary compatability */
 	uint8_t minor;		/* Feature availability */
 	uint16_t fix;		/* Defect repair */
-	const char *git_commit_id;	/* git commit id */
+	char git_commit_id[41];	/* git commit id */
 };
 #pragma pack()
+
+int ods_file_version(const char *path, struct ods_version_s *ver);
+
 /**
  * \brief Return a structure defining the ODS database version
  * \returns ods_version_s
  */
-struct ods_version_s ods_version(ods_t ods);
+void ods_version(ods_t ods, struct ods_version_s *ver);
 
 typedef struct ods_stat {
 	struct timespec st_atim;
@@ -477,6 +480,8 @@ extern void ods_dump(ods_t ods, FILE *fp);
  * Called by the ods_obj_iter() function for each object in the ODS. If
  * the function wishes to cancel iteration, return !0, otherwise,
  * return 0.
+ *
+ * The callback function owns the reference to the provided object.
  *
  * \param ods	The ODS handle
  * \param obj	The object handle

@@ -272,6 +272,7 @@ cdef class Container(SosObject):
             self.open(path, o_perm=o_perm)
 
     def version(self):
+        cdef sos_version_s vers
         if self.c_cont != NULL:
             return dsos_container_version(self.c_cont)
         return None
@@ -4416,6 +4417,30 @@ cdef class Value(object):
         if self.c_obj:
             sos_obj_put(self.c_obj)
             self.c_obj = NULL
+
+    def __gt__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) > 0
+
+    def __lt__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) < 0
+
+    def __ge__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) >= 0
+
+    def __le__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) <= 0
+
+    def __eq__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) == 0
+
+    def __ne__(self, val):
+        v = <Value>val
+        return sos_value_cmp(self.c_v, v.c_v) != 0
 
 cdef class Object(object):
     """

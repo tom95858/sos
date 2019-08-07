@@ -106,10 +106,11 @@ struct sos_version_s {
 	uint8_t major;		/* Binary compatability */
 	uint8_t minor;		/* Feature availability */
 	uint16_t fix;		/* Defect repair */
-	const char *git_commit_id;	/* git commit id */
+	char git_commit_id[41];	/* git commit id */
 };
 #pragma pack()
-struct sos_version_s sos_container_version(sos_t sos);
+int sos_container_file_version(const char *path, struct sos_version_s *ver);
+void sos_container_version(sos_t sos, struct sos_version_s *ver);
 int sos_container_new(const char *path, int o_mode);
 sos_t sos_container_open(const char *path, sos_perm_t o_perm);
 int sos_container_verify(sos_t sos);
@@ -429,6 +430,8 @@ int64_t sos_part_index(sos_part_t src_part);
  * Called by the sos_part_obj_iter() function for each object in the partition. If
  * the function wishes to cancel iteration, return !0, otherwise,
  * return 0.
+ *
+ * This callback function owns a reference on the provided object.
  *
  * \param sos	The container handle
  * \param obj	The object handle

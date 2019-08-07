@@ -162,6 +162,123 @@ static int TIMESTAMP_cmp(sos_value_t a, sos_value_t b, size_t size)
 	return 0;
 }
 
+static int JOIN_cmp(sos_value_t a, sos_value_t b, size_t size)
+{
+	ods_key_comp_t comp_a;
+	ods_key_comp_t comp_b;
+	off_t koff;
+	int64_t res = 0;
+
+	for (koff = 0; koff < a->data->join.count;) {
+		comp_a = (ods_key_comp_t)&(a->data->join.data.byte_[koff]);
+		comp_b = (ods_key_comp_t)&(b->data->join.data.byte_[koff]);
+		switch (comp_a->type) {
+		case SOS_TYPE_DOUBLE:
+			if (comp_a->value.double_ < comp_b->value.double_)
+				return -1;
+			if (comp_a->value.double_ > comp_b->value.double_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.double_);
+			break;
+		case SOS_TYPE_TIMESTAMP:
+			if (comp_a->value.tv_.tv_sec < comp_b->value.tv_.tv_sec)
+				return -1;
+			if (comp_a->value.tv_.tv_sec > comp_b->value.tv_.tv_sec)
+				return 1;
+			if (comp_a->value.tv_.tv_usec < comp_b->value.tv_.tv_usec)
+				return -1;
+			if (comp_a->value.tv_.tv_usec > comp_b->value.tv_.tv_usec)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.tv_);
+			break;
+		case SOS_TYPE_UINT64:
+			if (comp_a->value.uint64_ < comp_b->value.uint64_)
+				return -1;
+			if (comp_a->value.uint64_ > comp_b->value.uint64_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.uint64_);
+			break;
+		case SOS_TYPE_INT64:
+			if (comp_a->value.int64_ < comp_b->value.int64_)
+				return -1;
+			if (comp_a->value.int64_ > comp_b->value.int64_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.int64_);
+			break;
+		case SOS_TYPE_FLOAT:
+			if (comp_a->value.float_ < comp_b->value.float_)
+				return -1;
+			if (comp_a->value.float_ > comp_b->value.float_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.float_);
+			break;
+		case SOS_TYPE_UINT32:
+			if (comp_a->value.uint32_ < comp_b->value.uint32_)
+				return -1;
+			if (comp_a->value.uint32_ > comp_b->value.uint32_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.uint32_);
+			break;
+		case SOS_TYPE_INT32:
+			if (comp_a->value.int32_ < comp_b->value.int32_)
+				return -1;
+			if (comp_a->value.int32_ > comp_b->value.int32_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.int32_);
+			break;
+		case SOS_TYPE_UINT16:
+			if (comp_a->value.uint16_ < comp_b->value.uint16_)
+				return -1;
+			if (comp_a->value.uint16_ > comp_b->value.uint16_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.uint16_);
+			break;
+		case SOS_TYPE_INT16:
+			if (comp_a->value.int16_ < comp_b->value.int16_)
+				return -1;
+			if (comp_a->value.int16_ > comp_b->value.int16_)
+				return 1;
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.int16_);
+			break;
+		case SOS_TYPE_STRUCT:
+		case SOS_TYPE_BYTE_ARRAY:
+			res = min(comp_a->value.str.len, comp_b->value.str.len);
+			res = memcmp(comp_a->value.str.str, comp_b->value.str.str, res);
+			if (res == 0)
+				res = comp_a->value.str.len - comp_b->value.str.len;
+			if (res)
+				return res;
+			/* NB: if we get here we know the value and length of the two values are identical */
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.str.len) + comp_a->value.str.len;
+			break;
+		case SOS_TYPE_CHAR_ARRAY:
+			res = min(comp_a->value.str.len, comp_b->value.str.len);
+			res = strncmp(comp_a->value.str.str, comp_b->value.str.str, res);
+			if (res == 0)
+				res = comp_a->value.str.len - comp_b->value.str.len;
+			if (res)
+				return res;
+			/* NB: if we get here we know the value and length of the two strings are identical */
+			koff += sizeof(uint16_t) + sizeof(comp_a->value.str.len) + comp_a->value.str.len;
+			break;
+		case SOS_TYPE_LONG_DOUBLE:
+		case SOS_TYPE_INT16_ARRAY:
+		case SOS_TYPE_INT32_ARRAY:
+		case SOS_TYPE_INT64_ARRAY:
+		case SOS_TYPE_UINT16_ARRAY:
+		case SOS_TYPE_UINT32_ARRAY:
+		case SOS_TYPE_UINT64_ARRAY:
+		case SOS_TYPE_FLOAT_ARRAY:
+		case SOS_TYPE_DOUBLE_ARRAY:
+		case SOS_TYPE_LONG_DOUBLE_ARRAY:
+		default:
+			assert(0 == "unsupported compound key component");
+			break;
+		}
+	}
+	return res;
+}
+
 static int OBJ_cmp(sos_value_t a, sos_value_t b, size_t size)
 {
 	return memcmp(a->data->prim.ref_.idx_data.bytes, b->data->prim.ref_.idx_data.bytes, sizeof(ods_idx_data_t));
@@ -202,123 +319,6 @@ static int OBJ_ARRAY_cmp(sos_value_t a, sos_value_t b, size_t size)
 			return res;
 	}
 	return a_len - b_len;
-}
-
-static int JOIN_cmp(sos_value_t a, sos_value_t b, size_t size)
-{
-	ods_key_comp_t comp_a;
-	ods_key_comp_t comp_b;
-	off_t koff;
-	int64_t res = 0;
-
-	for (koff = 0; koff < a->data->join.count;) {
-		comp_a = (ods_key_comp_t)&(a->data->join.data.byte_[koff]);
-		comp_b = (ods_key_comp_t)&(b->data->join.data.byte_[koff]);
-		switch (comp_a->type) {
-		    case SOS_TYPE_DOUBLE:
-			if (comp_a->value.double_ < comp_b->value.double_)
-				return -1;
-			if (comp_a->value.double_ > comp_b->value.double_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.double_);
-			break;
-		    case SOS_TYPE_TIMESTAMP:
-			if (comp_a->value.tv_.tv_sec < comp_b->value.tv_.tv_sec)
-				return -1;
-			if (comp_a->value.tv_.tv_sec > comp_b->value.tv_.tv_sec)
-				return 1;
-			if (comp_a->value.tv_.tv_usec < comp_b->value.tv_.tv_usec)
-				return -1;
-			if (comp_a->value.tv_.tv_usec > comp_b->value.tv_.tv_usec)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.tv_);
-			break;
-		    case SOS_TYPE_UINT64:
-			if (comp_a->value.uint64_ < comp_b->value.uint64_)
-				return -1;
-			if (comp_a->value.uint64_ > comp_b->value.uint64_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.uint64_);
-			break;
-		    case SOS_TYPE_INT64:
-			if (comp_a->value.int64_ < comp_b->value.int64_)
-				return -1;
-			if (comp_a->value.int64_ > comp_b->value.int64_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.int64_);
-			break;
-		    case SOS_TYPE_FLOAT:
-			if (comp_a->value.float_ < comp_b->value.float_)
-				return -1;
-			if (comp_a->value.float_ > comp_b->value.float_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.float_);
-			break;
-		    case SOS_TYPE_UINT32:
-			if (comp_a->value.uint32_ < comp_b->value.uint32_)
-				return -1;
-			if (comp_a->value.uint32_ > comp_b->value.uint32_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.uint32_);
-			break;
-		    case SOS_TYPE_INT32:
-			if (comp_a->value.int32_ < comp_b->value.int32_)
-				return -1;
-			if (comp_a->value.int32_ > comp_b->value.int32_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.int32_);
-			break;
-		    case SOS_TYPE_UINT16:
-			if (comp_a->value.uint16_ < comp_b->value.uint16_)
-				return -1;
-			if (comp_a->value.uint16_ > comp_b->value.uint16_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.uint16_);
-			break;
-		    case SOS_TYPE_INT16:
-			if (comp_a->value.int16_ < comp_b->value.int16_)
-				return -1;
-			if (comp_a->value.int16_ > comp_b->value.int16_)
-				return 1;
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.int16_);
-			break;
-		    case SOS_TYPE_STRUCT:
-		    case SOS_TYPE_BYTE_ARRAY:
-			res = min(comp_a->value.str.len, comp_b->value.str.len);
-			res = memcmp(comp_a->value.str.str, comp_b->value.str.str, res);
-			if (res == 0)
-				res = comp_a->value.str.len - comp_b->value.str.len;
-			if (res)
-				return res;
-			/* NB: if we get here we know the value and length of the two values are identical */
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.str.len) + comp_a->value.str.len;
-			break;
-		    case SOS_TYPE_CHAR_ARRAY:
-			res = min(comp_a->value.str.len, comp_b->value.str.len);
-			res = strncmp(comp_a->value.str.str, comp_b->value.str.str, res);
-			if (res == 0)
-				res = comp_a->value.str.len - comp_b->value.str.len;
-			if (res)
-				return res;
-			/* NB: if we get here we know the value and length of the two strings are identical */
-			koff += sizeof(uint16_t) + sizeof(comp_a->value.str.len) + comp_a->value.str.len;
-			break;
-		    case SOS_TYPE_LONG_DOUBLE:
-		    case SOS_TYPE_INT16_ARRAY:
-		    case SOS_TYPE_INT32_ARRAY:
-		    case SOS_TYPE_INT64_ARRAY:
-		    case SOS_TYPE_UINT16_ARRAY:
-		    case SOS_TYPE_UINT32_ARRAY:
-		    case SOS_TYPE_UINT64_ARRAY:
-		    case SOS_TYPE_FLOAT_ARRAY:
-		    case SOS_TYPE_DOUBLE_ARRAY:
-		    case SOS_TYPE_LONG_DOUBLE_ARRAY:
-		    default:
-			assert(0 == "unsupported compound key component");
-			break;
-		}
-	}
-	return res;
 }
 
 #define ARRAY_CMP(_n_, _t_, _f_)				\
