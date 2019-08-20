@@ -38,17 +38,6 @@ then
   AC_SUBST([NUMPY_INCLUDE_PATH])
 fi
 
-dnl Check for tcmalloc
-OCFLAGS=$CFLAGS
-CFLAGS=""
-LIB_TCMALLOC=""
-AC_CHECK_LIB(tcmalloc,
-		malloc,
-		[LIB_TCMALLOC="-ltcmalloc"],
-		[AC_MSG_WARN(You may wish to install libtcmalloc for better performance)])
-AC_SUBST([LIB_TCMALLOC])
-CFLAGS=$OCFLAGS
-
 dnl Check for zap unless DSOS is disabled.
 dnl Force the user to specify --with-zap=/path/to/it so we don't get
 dnl into situations where the wrong zap install is being picked up.
