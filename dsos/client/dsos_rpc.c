@@ -243,7 +243,8 @@ dsos_rpc_t *dsos_rpc_new(dsos_rpc_flags_t flags, dsos_rpc_type_t type)
 
 	pthread_mutex_lock(&rpc_id_lock);
 	dsos_debug("rpc %p ids %ld..%ld for %d server%s\n", rpc,
-		   rpc_next_id, rpc_next_id+num_servers-1, num_servers, num_servers==1?"":"s");
+		   rpc_next_id, rpc_next_id+num_servers-1, num_servers,
+		   rpc->flags & DSOS_RPC_ONE?"":"s");
 	for (i = 0; i < num_servers; ++i) {
 		buf.free_fn    = free;
 		buf.len        = sizeof(dsos_msg_t);
@@ -344,7 +345,7 @@ int dsos_rpc_send(dsos_rpc_t *rpc, dsos_rpc_flags_t flags)
 			continue;
 		}
 
-		server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+		server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 		conn = &g.conns[server_num];
 
 		rbn = dsos_calloc(1, sizeof(struct rpc_rbn));
@@ -439,7 +440,7 @@ void dsos_rpc_handle_resp(dsos_conn_t *conn, dsos_msg_t *resp, size_t len)
 	sem_post(&conn->rpc_credit_sem);
 
 	rpc = rbn->rpc;
-	if (rpc->num_servers == 1)
+	if (rpc->flags & DSOS_RPC_ONE)
 		buf = rpc->buf;
 	else
 		buf = &rpc->bufs[conn->server_id];
@@ -526,7 +527,7 @@ void dsos_rpc_pack_u32_all(dsos_rpc_t *rpc, uint32_t val)
 
 	for (i = 0; i < g.num_servers; ++i) {
 		if (dsos_pack_u32(&rpc->bufs[i].req, val)) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -548,7 +549,7 @@ void dsos_rpc_pack_u64_all(dsos_rpc_t *rpc, uint64_t val)
 
 	for (i = 0; i < g.num_servers; ++i) {
 		if (dsos_pack_u64(&rpc->bufs[i].req, val)) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -570,7 +571,7 @@ void dsos_rpc_pack_str_all(dsos_rpc_t *rpc, const char *str)
 
 	for (i = 0; i < g.num_servers; ++i) {
 		if (dsos_pack_str(&rpc->bufs[i].req, str)) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -649,7 +650,7 @@ void dsos_rpc_pack_obj_id_all(dsos_rpc_t *rpc, sos_obj_ref_t obj_id)
 	for (i = 0; i < g.num_servers; ++i) {
 		ret = dsos_pack_obj_id(&rpc->bufs[i].req, obj_id);
 		if (ret) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -699,7 +700,7 @@ void dsos_rpc_pack_handles(dsos_rpc_t *rpc, dsos_handle_t *handles)
 
 	for (i = 0; i < g.num_servers; ++i) {
 		if (dsos_pack_u64(&rpc->bufs[i].req, handles[i])) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -726,7 +727,7 @@ void dsos_rpc_pack_obj_ptrs(dsos_rpc_t *rpc, sos_obj_t *objs)
 	for (i = 0; i < g.num_servers; ++i) {
 		ret = dsos_pack_obj_ptr(&rpc->bufs[i].req, objs[i]);
 		if (ret) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -788,7 +789,7 @@ void dsos_rpc_pack_schema_all(dsos_rpc_t *rpc, sos_schema_t schema)
 
 	for (i = 0; i < g.num_servers; ++i) {
 		if (dsos_pack_schema(&rpc->bufs[i].req, schema)) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -820,7 +821,7 @@ void dsos_rpc_pack_key_all(dsos_rpc_t *rpc, sos_key_t key)
 
 	for (i = 0; i < g.num_servers; ++i) {
 		if (dsos_pack_key(&rpc->bufs[i].req, key)) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -841,7 +842,7 @@ void dsos_rpc_pack_attr_all(dsos_rpc_t *rpc, sos_attr_t attr)
 		ret  = dsos_pack_handle(&rpc->bufs[i].req, attr->schema->dsos.handles[i]);
 		ret |= dsos_pack_u32(&rpc->bufs[i].req, attr->data->id);
 		if (ret) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 	}
@@ -866,7 +867,7 @@ void dsos_rpc_pack_value_all(dsos_rpc_t *rpc, sos_value_t value)
 		sos_value_to_str(value, str, len);
 		ret = dsos_pack_str(&rpc->bufs[i].req, str);
 		if (ret) {
-			server_num = (rpc->num_servers == 1) ? rpc->server_num : i;
+			server_num = (rpc->flags & DSOS_RPC_ONE) ? rpc->server_num : i;
 			dsos_err_set_local(rpc->status, i, E2BIG);
 		}
 		free(str);
