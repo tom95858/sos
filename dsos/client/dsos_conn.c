@@ -147,6 +147,9 @@ void dsos_disconnect(void)
 	zap_err_t	zerr;
 
 	dsos_debug("starting\n");
+	zerr = zap_unmap(g.conns[0].ep, g.map);
+	if (zerr)
+		dsos_error("zap_unmap zerr %d (%s)\n", zerr, zap_err_str(zerr));
 	for (i = 0; i < g.num_servers; ++i) {
 		sem_init(&g.conns[i].conn_sem, 0, 0);
 		ret = zap_close(g.conns[i].ep);

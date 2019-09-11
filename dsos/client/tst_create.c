@@ -36,7 +36,7 @@ sem_t		sem2;
 sos_obj_ref_t	*refs;
 dsos_t		*cont;
 sos_schema_t	schema;
-sos_attr_t	attr_seq, attr_hash, attr_data, attr_int1, attr_int2;
+sos_attr_t	attrs[100];
 
 uint64_t	hash(void *buf, int len);
 void		do_obj_creates();
@@ -232,6 +232,8 @@ void do_ping()
 
 void do_init()
 {
+	int	i;
+
 	cont = dsos_container_open(cont_nm, 0755);
 	if (!cont) {
 		cont = create_cont(cont_nm, 0755);
@@ -247,41 +249,120 @@ void do_init()
 		dsos_perror("could not open schema 'test'\n");
 		exit(1);
 	}
-	attr_seq = sos_schema_attr_by_name(schema, "seq");
-	if (!attr_seq) {
-		dsos_perror("could not get attr seq from schema\n");
-		exit(1);
-	}
-	attr_hash = sos_schema_attr_by_name(schema, "hash");
-	if (!attr_hash) {
-		dsos_perror("could not get attr hash from schema\n");
-		exit(1);
-	}
-	attr_data = sos_schema_attr_by_name(schema, "data");
-	if (!attr_data) {
-		dsos_perror("could not get attr data from schema\n");
-		exit(1);
-	}
-	attr_int1 = sos_schema_attr_by_name(schema, "int1");
-	if (!attr_int1) {
-		dsos_perror("could not get attr int1 from schema\n");
-		exit(1);
-	}
-	attr_int2 = sos_schema_attr_by_name(schema, "int2");
-	if (!attr_int2) {
-		dsos_perror("could not get attr int2 from schema\n");
-		exit(1);
+	for (i = 0; i < 100; ++i) {
+		char attr_nm[8];
+		snprintf(attr_nm, sizeof(attr_nm), "f%02d", i);
+		attrs[i] = sos_schema_attr_by_name(schema, attr_nm);
+		if (!attrs[i]) {
+			dsos_perror("could not get attr %s from schema\n", attr_nm);
+			exit(1);
+		}
 	}
 }
 
 struct sos_schema_template schema_template = {
 	.name = "test",
 	.attrs = {
-		{ .name = "seq",  .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "hash", .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "int1", .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "int2", .type = SOS_TYPE_UINT64,     .indexed = 1 },
-		{ .name = "data", .type = SOS_TYPE_CHAR_ARRAY, .indexed = 0, .size = 9000 },
+		{ .name = "f00",  .type = SOS_TYPE_DOUBLE,     .indexed = 1 },
+		{ .name = "f01",  .type = SOS_TYPE_DOUBLE,     .indexed = 1 },
+		{ .name = "f02",  .type = SOS_TYPE_DOUBLE,     .indexed = 1 },
+		{ .name = "f03",  .type = SOS_TYPE_DOUBLE,     .indexed = 1 },
+		{ .name = "f04",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f05",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f06",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f07",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f08",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f09",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f10",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f11",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f12",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f13",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f14",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f15",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f16",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f17",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f18",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f19",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f20",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f21",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f22",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f23",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f24",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f25",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f26",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f27",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f28",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f29",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f30",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f31",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f32",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f33",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f34",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f35",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f36",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f37",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f38",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f39",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f40",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f41",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f42",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f43",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f44",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f45",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f46",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f47",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f48",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f49",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f50",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f51",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f52",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f53",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f54",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f55",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f56",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f57",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f58",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f59",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f60",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f61",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f62",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f63",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f64",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f65",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f66",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f67",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f68",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f69",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f70",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f71",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f72",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f73",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f74",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f75",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f76",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f77",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f78",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f79",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f80",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f81",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f82",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f83",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f84",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f85",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f86",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f87",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f88",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f89",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f90",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f91",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f92",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f93",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f94",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f95",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f96",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f97",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f98",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
+		{ .name = "f99",  .type = SOS_TYPE_DOUBLE,     .indexed = 0 },
 		{ .name = NULL }
 	}
 };
@@ -349,6 +430,14 @@ void obj_cb(sos_obj_t obj, void *ctxt)
 	sos_obj_put(obj);
 }
 
+void set_obj(sos_obj_t obj, int num)
+{
+	int	i;
+
+	for (i = 0; i < 100; ++i)
+		sos_obj_attr_value_set(obj, attrs[i], (double)num + i/100.0);
+}
+
 void do_obj_creates()
 {
 	int		i, ret;
@@ -371,14 +460,8 @@ void do_obj_creates()
 			exit(1);
 		}
 
-		sprintf(mydata, "seq=%08x", num);
-		sos_obj_attr_value_set(obj, attr_seq, num);
-		sos_obj_attr_value_set(obj, attr_int1, num);
-		sos_obj_attr_value_set(obj, attr_int2, num);
-		sos_obj_attr_value_set(obj, attr_hash, hash(mydata, 400));
-		sos_obj_attr_value_set(obj, attr_data, strlen(mydata)+1, mydata);
+		set_obj(obj, num);
 		num += 1;
-
 		ret = dsos_obj_create(obj, obj_cb, (void *)(uintptr_t)i);
 		if (ret) {
 			dsos_perror("dsos_obj_create %d\n", ret);
@@ -412,7 +495,7 @@ void do_obj_iter()
 	sos_obj_t	obj;
 	dsos_iter_t	*iter;
 
-	iter = dsos_attr_iter_new(attr_seq);
+	iter = dsos_attr_iter_new(attrs[0]);
 	if (!iter) {
 		printf("could not create iter\n");
 		exit(1);
@@ -422,10 +505,9 @@ void do_obj_iter()
 	dsos_iter_begin(iter);
 	while (obj = dsos_iter_obj(iter)) {
 		char buf1[16], buf2[32];
-		sos_obj_attr_to_str(obj, attr_data, mydata, 4000);
-		sos_obj_attr_to_str(obj, attr_seq, buf1, 16);
-		sos_obj_attr_to_str(obj, attr_hash, buf2, 32);
-		printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+		sos_obj_attr_to_str(obj, attrs[0], buf1, 16);
+		sos_obj_attr_to_str(obj, attrs[1], buf2, 32);
+		printf("obj %d %s %s\n", num, buf1, buf2);
 		sos_obj_put(obj);
 		++num;
 		if (--num_iters <= 0) break;
@@ -445,7 +527,7 @@ void do_obj_iter_finds()
 	sos_obj_t	obj;
 	struct timespec	beg, last;
 
-	iter = dsos_attr_iter_new(attr_seq);
+	iter = dsos_attr_iter_new(attrs[0]);
 	if (!iter) {
 		printf("could not create iter\n");
 		exit(1);
@@ -455,15 +537,14 @@ void do_obj_iter_finds()
 	clock_gettime(CLOCK_REALTIME, &beg);
 	clock_gettime(CLOCK_REALTIME, &last);
 	for (i = 1; i <= num_iters; ++i) {
-		key = sos_key_for_attr(NULL, attr_seq, num);
+		key = sos_key_for_attr(NULL, attrs[0], (double)num);
 		dsos_iter_find(iter, key);
 		obj = dsos_iter_obj(iter);
 		if (obj) {
 			char buf1[16], buf2[32];
-			sos_obj_attr_to_str(obj, attr_data, mydata, 4000);
-			sos_obj_attr_to_str(obj, attr_seq, buf1, 16);
-			sos_obj_attr_to_str(obj, attr_hash, buf2, 32);
-			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+			sos_obj_attr_to_str(obj, attrs[0], buf1, 16);
+			sos_obj_attr_to_str(obj, attrs[1], buf2, 32);
+			printf("obj %d %s %s\n", num, buf1, buf2);
 		} else {
 			printf("obj %d NOT FOUND\n", num);
 			break;
@@ -490,9 +571,8 @@ void do_obj_deletes()
 	sos_key_t	key;
 	sos_obj_t	obj;
 	struct timespec	beg, last;
-	char		buf1[16], buf2[32];
 
-	iter = dsos_attr_iter_new(attr_seq);
+	iter = dsos_attr_iter_new(attrs[0]);
 	if (!iter) {
 		printf("could not create iter\n");
 		exit(1);
@@ -509,10 +589,10 @@ void do_obj_deletes()
 			break;
 		}
 		if (obj && verbose) {
-			sos_obj_attr_to_str(obj, attr_data, mydata, 4000);
-			sos_obj_attr_to_str(obj, attr_seq, buf1, 16);
-			sos_obj_attr_to_str(obj, attr_hash, buf2, 32);
-			printf("obj %d %s %s %s\n", num, buf1, mydata, buf2);
+			char buf1[16], buf2[32];
+			sos_obj_attr_to_str(obj, attrs[0], buf1, 16);
+			sos_obj_attr_to_str(obj, attrs[1], buf2, 32);
+			printf("obj %d %s %s\n", num, buf1, buf2);
 		}
 		dsos_obj_delete(obj);
 		sos_obj_put(obj);
@@ -527,15 +607,6 @@ void do_obj_deletes()
 		print_elapsed(num_iters % progress, num_iters, beg, last);
 	dsos_iter_free(iter);
 	free(mydata);
-}
-
-uint64_t hash(void *buf, int len)
-{
-	uint8_t		*p = buf;
-	uint64_t	ret = 0;
-
-	while (len--) ret += *p++;
-	return ret;
 }
 
 /* Do a simple, purely local SOS object-create test. */
@@ -585,30 +656,14 @@ void do_local()
 		fprintf(stderr, "could not add schema err %d\n", ret);
 		exit(1);
 	}
-	attr_seq = sos_schema_attr_by_name(schema, "seq");
-	if (!attr_seq) {
-		fprintf(stderr, "could not find attr 'seq'\n");
-		exit(1);
-	}
-	attr_hash = sos_schema_attr_by_name(schema, "hash");
-	if (!attr_hash) {
-		fprintf(stderr, "could not find attr 'hash'\n");
-		exit(1);
-	}
-	attr_data = sos_schema_attr_by_name(schema, "data");
-	if (!attr_data) {
-		fprintf(stderr, "could not find attr 'data'\n");
-		exit(1);
-	}
-	attr_int1 = sos_schema_attr_by_name(schema, "int1");
-	if (!attr_int1) {
-		fprintf(stderr, "could not find attr 'int1'\n");
-		exit(1);
-	}
-	attr_int2 = sos_schema_attr_by_name(schema, "int2");
-	if (!attr_int2) {
-		fprintf(stderr, "could not find attr 'int2'\n");
-		exit(1);
+	for (i = 0; i < 100; ++i) {
+		char attr_nm[8];
+		snprintf(attr_nm, sizeof(attr_nm), "f%02d", i);
+		attrs[i] = sos_schema_attr_by_name(schema, attr_nm);
+		if (!attrs[i]) {
+			dsos_perror("could not get attr %s from schema\n", attr_nm);
+			exit(1);
+		}
 	}
 
 	mydata = malloc(4001);
@@ -622,12 +677,7 @@ void do_local()
 			exit(1);
 		}
 
-		sprintf(mydata, "seq=%08x", num);
-		sos_obj_attr_value_set(obj, attr_seq, num);
-		sos_obj_attr_value_set(obj, attr_int1, num);
-		sos_obj_attr_value_set(obj, attr_int2, num);
-		sos_obj_attr_value_set(obj, attr_hash, hash(mydata, 400));
-		sos_obj_attr_value_set(obj, attr_data, strlen(mydata)+1, mydata);
+		set_obj(obj, num);
 		num += 1;
 
 		ret = sos_obj_index(obj);

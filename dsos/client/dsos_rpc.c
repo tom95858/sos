@@ -1,11 +1,13 @@
 /*
  * The DSOS RPC layer sends "request" messages to one or more servers
- * and matches them up with "response" messages that later arrive.  A
- * message is a 2k-byte buffer consisting of a small fixed-sized
- * header (defined in dsos_rpc_msg.h) followed by serialized data specific
- * to the RPC.  The header contains the RPC type and a client-unique
- * 64-bit id that the server reflects back in its response
- * message. The RPC layer uses this id to match request and response.
+ * and matches them up with "response" messages that later arrive.
+ * A message is a variable-length buffer consisting of a small
+ * fixed-sized header (defined in dsos_rpc_msg.h) followed by
+ * serialized data specific to the RPC.  The header contains the RPC
+ * type and a client-unique 64-bit id that the server reflects back in
+ * its response message. The RPC layer uses this id to match request
+ * and response. RPC requests or responses larger than the transport
+ * message size are split across multiple transport messages.
  *
  * 1. CREATE RPC REQUEST
  *
@@ -18,9 +20,12 @@
  * By requiring allocation, this layer can support transports that
  * directly provide their buffers, thereby avoiding a copy.  With
  * DSOS_REQ_ALL, g.num_servers request message buffers are allocated;
- * with DSOS_REQ_ONE, one is allocated.
+ * with DSOS_REQ_ONE, one is allocated.  The request buffers initially
+ * are sized to be the zap transport's maximum message size, but the
+ * buffer is dynamnically grown as data is serialized into the request
+ * as described next.
  *
- * The request message then can be filled in, by calling helper functions
+ * The request is constructed by calling helper functions
  * which call into the dsos_pack_xxx/dsos_unpack_xxx library to
  * serialize and deserialize data structures in to and out of the
  * request buffer (pack operations) or response buffer (unpack):
@@ -39,6 +44,7 @@
  *   void dsos_rpc_pack_obj_id_one(rpc, sos_obj_ref_t);
  *   void dsos_rpc_pack_obj_id_all(rpc, sos_obj_ref_t);
  *   void dsos_rpc_pack_handle(rpc, dsos_handle_t);
+ *   ... (see dsos_pack.c for the most up-to-date list)
  *
  * The _one variants are used for DSOS_REQ_ONE and the _all variants
  * are used for DSOS_REQ_ALL where the given value is serialized to
@@ -46,7 +52,7 @@
  *
  * To faciliate passing vectors, the following take an array of
  * pointers to handles or objects and serialize them across the
- * request buffers:
+ * request buffers for all servers:
  *
  *   void dsos_rpc_pack_handles(rpc, dsos_handle_t *);
  *   void dsos_rpc_pack_obj_ptrs(rpc, sos_obj_t *);
@@ -112,7 +118,7 @@
  *
  *        DSOS_RPC_PERSIST_RESPONSES
  *
- *   2. Flags for waiting: the dsos_rpc_send() call is asynchronous unless
+ *   3. Flags for waiting: the dsos_rpc_send() call is asynchronous unless
  *      the following flag is specified.
  *
  *        DSOS_RPC_WAIT
@@ -121,7 +127,7 @@
  *      sem_post()s are done after each callback. Thus, the caller will
  *      block until the last callback has returned.
  *
- *   3. Flags for cleanup: the dsos_rpc_t object is reference counted
+ *   4. Flags for cleanup: the dsos_rpc_t object is reference counted
  *      and begins with one reference which either must be
  *      dsos_req_put() by the caller or be put by specifying
  *
