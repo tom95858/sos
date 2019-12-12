@@ -130,6 +130,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -732,11 +733,13 @@ int64_t __sos_schema_id_cmp(void *a, const void *b, void *arg)
 struct sos_version_s sos_container_version(sos_t sos)
 {
 	struct sos_version_s vers;
+	ods_obj_t udata = ods_get_user_data(sos->schema_ods);
 	struct ods_version_s overs = ods_version(sos->schema_ods);
-	vers.major = overs.major;
-	vers.minor = overs.minor;
-	vers.fix = overs.fix;
+	vers.major = SOS_SCHEMA_UDATA(udata)->vers.major;
+	vers.minor = SOS_SCHEMA_UDATA(udata)->vers.minor;
+	vers.fix = SOS_SCHEMA_UDATA(udata)->vers.fix;
 	vers.git_commit_id = overs.git_commit_id;
+	ods_obj_put(udata);
 	return vers;
 }
 
@@ -1183,6 +1186,8 @@ sos_obj_t __sos_init_obj_no_lock(sos_t sos, sos_schema_t schema, ods_obj_t ods_o
 	ods_atomic_inc(&schema->data->ref_count);
 	sos_obj->schema = schema;
 	sos_obj->ref_count = 1;
+	sos_obj->size = schema->data->obj_sz;
+	LIST_INSERT_HEAD(&sos->obj_list, sos_obj, entry);
 
 	return sos_obj;
 }
@@ -1212,6 +1217,8 @@ sos_obj_t __sos_init_obj(sos_t sos, sos_schema_t schema, ods_obj_t ods_obj,
  * \returns Pointer to the new object
  * \returns NULL if there is an error
  */
+#define ARRAY_RESERVE 256
+
 sos_obj_t sos_obj_new(sos_schema_t schema)
 {
 	ods_obj_t ods_obj;
@@ -1228,8 +1235,9 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 		errno = ENOSPC;
 		return NULL;
 	}
-	ods_obj = __sos_obj_new(part->obj_ods, schema->data->obj_sz,
-				&schema->sos->lock);
+	size_t array_data_sz = schema->data->array_cnt * ARRAY_RESERVE;
+
+	ods_obj = ods_obj_malloc(schema->data->obj_sz + array_data_sz);
 	if (!ods_obj)
 		goto err_0;
 	memset(ods_obj->as.ptr, 0, schema->data->obj_sz);
@@ -1238,6 +1246,7 @@ sos_obj_t sos_obj_new(sos_schema_t schema)
 	sos_obj = __sos_init_obj(schema->sos, schema, ods_obj, obj_ref);
 	if (!sos_obj)
 		goto err_1;
+	__sos_fixup_array_values(schema, sos_obj);
 	return sos_obj;
  err_1:
 	ods_obj_delete(ods_obj);
@@ -1293,13 +1302,11 @@ int sos_obj_copy(sos_obj_t dst_obj, sos_obj_t src_obj)
 			src_value = sos_value_init(&src_v_, src_obj, src_attr);
 			if (!src_value)
 				return EINVAL;
-			dst_value = sos_array_new(&dst_v_, dst_attr, dst_obj,
-						  src_value->data->array.count);
+			dst_value = sos_value_init(&dst_v_, dst_obj, dst_attr);
 			if (!dst_value)
 				return ENOMEM;
-			memcpy(dst_value->data->array.data.byte_,
-			       src_value->data->array.data.byte_,
-			       sos_value_size(src_value));
+			memcpy(sos_array(dst_value), sos_array(src_value),
+			       sos_value_size(dst_value));
 			sos_value_put(src_value);
 			sos_value_put(dst_value);
 		}
@@ -1414,19 +1421,11 @@ sos_schema_t sos_obj_schema(sos_obj_t obj)
  */
 void sos_obj_delete(sos_obj_t obj)
 {
-	sos_attr_t attr;
-	TAILQ_FOREACH(attr, &obj->schema->attr_list, entry) {
-		struct sos_value_s v_;
-		sos_value_t value;
-		if (!sos_attr_is_array(attr))
-			continue;
-		value = sos_value_init(&v_, obj, attr);
-		if (!value)
-			continue;
-		ods_obj_delete(value->obj->obj);
-		sos_value_put(value);
-	}
-	ods_obj_delete(obj->obj);
+	if (!obj->obj->ods)
+		free(obj->obj);
+	else
+		ods_obj_delete(obj->obj);
+	obj->obj = NULL;
 }
 
 /**
@@ -1554,6 +1553,12 @@ int sos_obj_index(sos_obj_t obj)
 	sos_key_t the_key = NULL;
 	SOS_KEY(key);
 	int rc;
+
+	if (NULL == obj->obj->ods) {
+		rc = sos_obj_commit(obj);
+		if (rc)
+			return rc;
+	}
 
 	TAILQ_FOREACH(attr, &obj->schema->idx_attr_list, idx_entry) {
 		sos_index_t index = sos_attr_index(attr);
