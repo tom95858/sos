@@ -43,7 +43,7 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from __future__ import print_function
+from builtins import str
 from cpython cimport PyObject, Py_INCREF
 from libc.stdint cimport *
 from libc.stdlib cimport calloc, malloc, free, realloc
@@ -658,13 +658,17 @@ cdef class Schema(SosObject):
                 raise ValueError("Invalid attribute type {0}.".format(n))
 
             if t == SOS_TYPE_JOIN:
-                join_attrs = attr['join_attrs']
+                try:
+                    join_attrs = []
+                    for attr_name in attr['join_attrs']:
+                        join_attrs.append(attr_name.encode())
+                except:
+                    raise ValueError("The 'join_attrs' attribute is required for the 'join' attribute type.")
+
                 join_count = len(join_attrs)
                 join_args = <char **>malloc(join_count * 8)
-                rc = 0
-                for attr_name in join_attrs:
-                    join_args[rc] = <char *>attr_name
-                    rc += 1
+                for i in range(len(join_attrs)):
+                    join_args[i] = <char *>join_attrs[i]
                 rc = sos_schema_attr_add(self.c_schema, attr['name'].encode(),
                                          t, <size_t>join_count, join_args)
             elif t == SOS_TYPE_STRUCT or t >= TYPE_IS_ARRAY:
@@ -688,11 +692,14 @@ cdef class Schema(SosObject):
                 # The index modifiers are optional
                 idx = attr['index']
                 if 'type' in idx:
-                    idx_type = idx['type']
+                    t = idx['type'].encode()
+                    idx_type = t
                 if 'key' in idx:
-                    idx_key = idx['key']
+                    k = idx['key'].encode()
+                    idx_key = k
                 if 'args' in idx:
-                    idx_args = idx['args']
+                    a = idx['args'].encode()
+                    idx_args = a
                 rc = sos_schema_index_modify(self.c_schema,
                                              attr['name'].encode(),
                                              idx_type,
@@ -738,7 +745,7 @@ cdef class Schema(SosObject):
 
     def name(self):
         """Returns the name of the schema"""
-        return sos_schema_name(self.c_schema)
+        return sos_schema_name(self.c_schema).decode('utf-8')
 
     def alloc(self):
         """Allocate a new object of this type in the container"""
@@ -752,7 +759,7 @@ cdef class Schema(SosObject):
         if type(attr_id) == int:
             return Attr(self, attr_id=attr_id)
         elif type(attr_id) == str:
-            return Attr(self, attr_name=attr_id.encode())
+            return Attr(self, attr_name=attr_id)
         raise ValueError("The index must be a string or an integer.")
 
     def __str__(self):
@@ -996,7 +1003,7 @@ cdef class Key(object):
             elif typ == SOS_TYPE_BYTE_ARRAY:
                 res.append(bytearray(specs[i].data.array.data.char_[:specs[i].data.array.count]))
             elif typ == SOS_TYPE_CHAR_ARRAY:
-                res.append(str(specs[i].data.array.data.char_[:specs[i].data.array.count]))
+                res.append(specs[i].data.array.data.char_[:specs[i].data.array.count].decode())
             elif typ == SOS_TYPE_UINT64_ARRAY:
                 a = []
                 for j in range(specs[i].data.array.count):
@@ -1250,7 +1257,7 @@ cdef class AttrIter(SosObject):
     ```
     it = ts.attr_iter()
     ```
-    The AttrIter implements begin(), end(), prev(), and next() to
+    The AttrIter implements begin(), end(), prev(), and __next__() to
     iterate through objects in the index. Each of these methods
     returns True if there is an object at the current iterator
     position or False otherwise. For example:
@@ -1260,7 +1267,7 @@ cdef class AttrIter(SosObject):
     while b:
         o = it.item()
         # do something with the object
-        b = it.next()
+        b = next(it)
     ```
     There are also methods that take a Key as an argument to position
     the iterator at an object with the specified key. See find(),
@@ -1329,7 +1336,7 @@ cdef class AttrIter(SosObject):
             return True
         return False
 
-    def next(self):
+    def __next__(self):
         """Move the iterator position to the next object in the index
         Returns:
         True    There is an object at the new iterator position
@@ -1576,7 +1583,7 @@ cdef class Attr(SosObject):
 
     def name(self):
         """Returns the attribute name"""
-        return sos_attr_name(self.c_attr)
+        return sos_attr_name(self.c_attr).decode('utf-8')
 
     def type(self):
         """Returns the attribute type"""
@@ -2360,7 +2367,7 @@ cdef class Filter(object):
     it = ts.obj_iter()
     ```
 
-    The Filter implements begin(), end(), prev(), and next() to
+    The Filter implements begin(), end(), __next__, and prev() to
     iterate through objects in the index. Each of these methods
     returns an Object or None, if there is no object at the iterator
     position. The rational for the difference of return value between
@@ -2374,7 +2381,7 @@ cdef class Filter(object):
     o = it.begin()
     while o:
         # do something with the object
-        o = it.next()
+        o = next(it)
     ```
     """
     cdef Attr attr
@@ -2515,7 +2522,7 @@ cdef class Filter(object):
         if type(value) != str:
             type_setters[typ](cond_attr.c_attr, cond_v.data, value)
         else:
-            rc = sos_value_from_str(cond_v, value, NULL)
+            rc = sos_value_from_str(cond_v, value.encode(), NULL)
             if rc != 0:
                 raise ValueError("The value {0} is invalid for the {1} attribute."
                                  .format(value, cond_attr.name()))
@@ -2568,7 +2575,7 @@ cdef class Filter(object):
         o = Object()
         return o.assign(c_obj)
 
-    def next(self):
+    def __next__(self):
         """Set the filter at the next object that matches all of the input conditions"""
         cdef sos_obj_t c_obj = dsos_filter_next(self.c_filt)
         if c_obj == NULL:
@@ -3607,11 +3614,11 @@ cdef class Index(object):
 
     def name(self):
         """Return the name of the index"""
-        return dsos_index_name(self.c_index)
+        return dsos_index_name(self.c_index).decode('utf-8')
 
     def key_type(self):
         """Return the Sos type-id for the key"""
-        return dsos_index_key_type(self.c_index)
+        return dsos_index_key_type(self.c_index).decode('utf-8')
 
     def stats(self):
         """Return a dictionary of index statistics as follows:
@@ -3671,7 +3678,7 @@ cdef object get_BYTE_ARRAY(sos_obj_t c_obj, sos_value_data_t c_data, sos_attr_t 
     return res
 
 cdef object get_CHAR_ARRAY(sos_obj_t c_obj, sos_value_data_t c_data, sos_attr_t c_attr):
-    return str(c_data.array.data.char_[:c_data.array.count])
+    return c_data.array.data.char_[:c_data.array.count].decode()
 
 cdef object get_INT64_ARRAY(sos_obj_t c_obj, sos_value_data_t c_data, sos_attr_t c_attr):
     res = np.ndarray([ c_data.array.count ], dtype=np.dtype('int64'), order="C")
@@ -3869,7 +3876,7 @@ cdef set_CHAR_ARRAY(sos_attr_t c_attr, sos_value_data_t c_data, val):
     s = val
     c_data.array.count = sz
     for i in range(sz):
-        c_data.array.data.char_[i] = s[i]
+        c_data.array.data.char_[i] = <bytes>s[i]
 
 cdef set_TIMESTAMP(sos_attr_t c_attr, sos_value_data_t c_data, val):
     cdef int secs
@@ -4087,7 +4094,7 @@ cdef set_key_INT16_ARRAY(sos_attr_t c_attr, ods_key_value_t c_key, val):
 cdef set_key_CHAR_ARRAY(sos_attr_t c_attr, ods_key_value_t c_key, val):
     cdef int i
     c_key.len = len(val)
-    ba = bytearray(val)
+    ba = bytearray(val, encoding='utf-8')
     for i in range(c_key.len):
         c_key.value[i] = <char>ba[i]
 
@@ -4163,6 +4170,7 @@ cdef set_key_STRUCT(sos_attr_t c_attr, ods_key_value_t c_key, val):
     cdef int l = len(val)
     if c_attr == NULL:
         raise ValueError("Attr is required to set STRUCT key")
+    val = val.encode()
     s = val
     count = sos_attr_size(c_attr)
     c_key.len = count
@@ -4371,7 +4379,7 @@ cdef class Value(object):
 
     def name(self):
         """Return the value's attribute name"""
-        return sos_attr_name(self.c_attr)
+        return sos_attr_name(self.c_attr).decode('utf-8')
 
     def strlen(self):
         """
@@ -4400,7 +4408,7 @@ cdef class Value(object):
                 self.c_str = <char *>malloc(self.c_str_sz + 1)
                 if self.c_str == NULL:
                     raise MemoryError("Insufficient memory to allocate {0} bytes.".format(sz))
-        return sos_value_to_str(self.c_v, self.c_str, sz)
+        return sos_value_to_str(self.c_v, self.c_str, sz).decode('utf-8')
 
     def __str__(self):
         return self.to_str()
@@ -4756,7 +4764,7 @@ cdef void uint8_array_nda_setter(np.ndarray nda, int idx, sos_value_t v):
         ndb[i] = v.data.array.data.byte_[i]
 
 cdef void int8_array_nda_setter(np.ndarray nda, int idx, sos_value_t v):
-    nda[idx] = str(v.data.array.data.char_[:v.data.array.count])
+    nda[idx] = v.data.array.data.char_[:v.data.array.count].decode()
 
 cdef void int16_array_nda_setter(np.ndarray nda, int idx, sos_value_t v):
     cdef int i
@@ -5374,9 +5382,108 @@ cdef class QueryInputer:
         res = DataSet()
         for attr_idx in range(0, nattr):
             res.append_array(res_idx,
-                             str(sos_attr_name(res_acc[attr_idx].attr)),
+                             sos_attr_name(res_acc[attr_idx].attr).decode(),
                              result[attr_idx])
         res.set_series_size(res_idx)
+        free(res_acc)
+        return res
+
+    def to_dataframe(self, Query query, index=None,
+                     max_array=DEFAULT_ARRAY_LIMIT, max_string=DEFAULT_ARRAY_LIMIT):
+        """Return the Query data as a DataFrame"""
+        import pandas as pd
+        cdef sos_obj_t c_o
+        cdef sos_value_s v_
+        cdef sos_value_t v
+        cdef int idx
+        cdef int attr_idx
+        cdef int res_idx
+        cdef int obj_idx
+        cdef int row_idx
+        cdef int nattr
+        cdef Attr attr
+        cdef int *res_type
+        cdef nda_setter_opt res_acc
+        cdef typ_str
+        cdef ColSpec col
+
+        nattr = len(query.columns)
+        if nattr == 0 or self.row_count == 0:
+            return None
+
+        res_acc = <nda_setter_opt>malloc(sizeof(nda_setter_opt_s) * nattr)
+        if res_acc == NULL:
+            raise MemoryError("Insufficient memory")
+
+        idx = 0
+        result = []
+
+        for col in query.columns:
+
+            attr = col.attr
+
+            res_acc[idx].attr = <sos_attr_t>attr.c_attr
+            res_acc[idx].idx = col.cursor_idx
+            res_acc[idx].setter_fn = nda_setters[attr.type()]
+            res_acc[idx].resample_fn = nda_resamplers[attr.type()]
+
+            atyp = col.attr_type
+            if atyp == SOS_TYPE_TIMESTAMP:
+                typ_str = 'datetime64[us]'
+            elif atyp == SOS_TYPE_STRUCT:
+                typ_str = 'uint8'
+            elif atyp == SOS_TYPE_UINT64:
+                typ_str = 'double'
+            elif atyp == SOS_TYPE_UINT32:
+                typ_str = 'double'
+            elif atyp == SOS_TYPE_INT64:
+                typ_str = 'double'
+            elif atyp == SOS_TYPE_INT32:
+                typ_str = 'double'
+            else:
+                typ_str = sos_type_strs[atyp].lower()
+                typ_str = typ_str.replace('_array', '')
+
+
+            if atyp >= TYPE_IS_ARRAY:
+                if atyp == SOS_TYPE_STRING:
+                    data = np.zeros([ self.row_count ],
+                                    dtype=np.dtype('|S{0}'.format(max_string)))
+                else:
+                    data = np.zeros([ self.row_count, max_array ],
+                                    dtype=np.dtype(typ_str))
+            elif atyp == SOS_TYPE_STRUCT:
+                data = np.zeros([ self.row_limit, sos_attr_size(attr.c_attr) ],
+                                dtype=np.dtype(np.uint8))
+            else:
+                data = np.zeros([ self.row_count ], dtype=np.dtype(typ_str))
+            result.append(data)
+            idx += 1
+
+        res_idx = 0
+        for row_idx in range(0, self.row_count):
+            obj_idx = row_idx * self.col_count
+            for attr_idx in range(0, nattr):
+                c_o = self.objects[obj_idx + res_acc[attr_idx].idx]
+                v = sos_value_init(&v_, c_o, res_acc[attr_idx].attr)
+                res_acc[attr_idx].setter_fn(result[attr_idx], res_idx, v)
+                sos_value_put(v)
+            res_idx += 1
+        self.row_count = 0
+
+        pdres = {}
+        df_idx = None
+        for attr_idx in range(0, nattr):
+            col_name = sos_attr_name(res_acc[attr_idx].attr).decode()
+            pdres[col_name] = result[attr_idx]
+            if index == col_name:
+                df_idx = pd.DatetimeIndex(result[attr_idx])
+        if index and df_idx is None:
+            raise ValueError("The index column {0} is not present in the result".format(index))
+        if df_idx is not None:
+            res = pd.DataFrame(pdres, index=df_idx)
+        else:
+            res = pd.DataFrame(pdres)
         free(res_acc)
         return res
 
@@ -5810,10 +5917,10 @@ cdef class Query:
                 return None
         return self.make_row(cursor)
 
-    def next(self):
+    def __next__(self):
         cursor = []
         for f in self.filters:
-            o = f.next()
+            o = next(f)
             if o:
                 cursor.append(o)
             else:
